@@ -16,16 +16,36 @@ pytestmark = pytest.mark.db
 REFERENCE = [h.addr("G12", "12"), h.addr("G14", "14"), h.addr("GT5", "30", unit="5"), h.addr("GT6", "30", unit="6")]
 
 
+PLANTED_IDS = ("pk_g_0000000000000000", "pk_d_0000000000000000", "pk_g_deadbeefdeadbeef")
+
+
+def restore_damage(admin):
+    """Put back what a test may have dropped or planted, so a test that fails before its own restore cannot break the next one."""
+    admin.execute("set session_replication_role = replica")
+    admin.execute("delete from property_link where property_id = any(%s)", (list(PLANTED_IDS),))
+    admin.execute("delete from property where property_id = any(%s)", (list(PLANTED_IDS),))
+    admin.execute("set session_replication_role = origin")
+    admin.execute("""DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'property_gnaf_pid_key') THEN
+            ALTER TABLE property ADD CONSTRAINT property_gnaf_pid_key UNIQUE (gnaf_pid); END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'property_link_score_check') THEN
+            ALTER TABLE property_link ADD CONSTRAINT property_link_score_check CHECK (score >= 0 AND score <= 1); END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'property_derived_key_ux') THEN
+            CREATE UNIQUE INDEX property_derived_key_ux ON property (canon_key) WHERE origin = 'derived'; END IF;
+        END $$""")
+
+
 @pytest.fixture()
 def done(hand, conn, admin, tmp_path):
-    """A finished run: links, a derived property, quarantined records, contacts."""
+    """A finished run: links, a derived property, quarantined records, contacts. Teardown restores any schema a test broke."""
     hand(REFERENCE)
     folder = h.write_feeds(tmp_path / "feeds", crm_rows=[
         h.crm("C1", "12 Smith St", name="Kate", email="kate@example.com"), h.crm("C2", "14 Smith St", name="Kate", email="kate@example.com", phone="02 5550 0001"),
         h.crm("C3", "Unit 9, 30 Smith St", name="Bob"), h.crm("C4", "18 Smith St", name="Bob", phone="(02) 5550 0001"), h.crm("C5", "Flat 5")],
         listing_rows=[h.listing("L1", "Unit 5, 30 Smith St")], sales_rows=[h.sale("S1", "12 Smith St, Fakeville NSW 2000", name="K", email="KATE@example.com")])
     h.run(conn, AGENCY, folder)
-    return conn, admin, folder
+    yield conn, admin, folder
+    restore_damage(admin)
 
 
 def check(conn, folder=None):
@@ -337,6 +357,34 @@ def test_class_a_derived_property_a_release_now_covers_is_reported_and_never_rew
     assert {r[0]: r[1] for r in admin.execute("select record_id, property_id from property_link").fetchall()} == ids
     with db.agency_tx(conn, "agency-b") as cur:
         assert reconcile(cur, "agency-b").ok
+
+
+def test_class_every_release_kind_against_every_agency_is_reported_only_to_the_agency_that_uses_it(hand, conn, admin, tmp_path):
+    """CLASS-TABLE: F12. The table is built by code: every release kind (the release adds the address as a principal, as an alias spelling, or not at all) against every agency that
+    ingested it. SUPERSEDED reaches an agency exactly when it uses a derived property the release now covers, and nothing is rewritten for any of them."""
+    import itertools
+    hand(REFERENCE)
+    table = [(kind, agency, 40 + 2 * i) for i, (kind, agency) in enumerate(itertools.product(("principal", "alias", "none"), (AGENCY, "agency-b")))]
+    feeds = {}
+    for agency in (AGENCY, "agency-b"):
+        rows = [h.crm(f"C{number}", f"{number} Smith St") for kind, a, number in table if a == agency]
+        feeds[agency] = h.write_feeds(tmp_path / agency, crm_rows=rows)
+        h.run(conn, agency, feeds[agency])
+    snapshot = (admin.execute("select * from property order by property_id").fetchall(), admin.execute("select * from property_link order by agency_id, record_id").fetchall())
+    release = list(REFERENCE)
+    for kind, agency, number in table:
+        if kind == "principal":
+            release.append(h.addr(f"G{number}", str(number)))
+        elif kind == "alias":
+            release.append(h.addr(f"A{number}", str(number), alias_of="G14"))
+    hand(release)
+    for agency in (AGENCY, "agency-b"):
+        expected = sorted(number for kind, a, number in table if a == agency and kind != "none")
+        with db.agency_tx(conn, agency) as cur:
+            res = reconcile(cur, agency, feeds[agency])
+        assert (names(res) == ["SUPERSEDED"]) == bool(expected), (agency, expected, res.findings)
+        assert f"superseded {len(expected)} derived properties now equal a G-NAF address" in res.lines, (agency, expected, res.lines)
+    assert (admin.execute("select * from property order by property_id").fetchall(), admin.execute("select * from property_link order by agency_id, record_id").fetchall()) == snapshot
 
 
 def test_a_derived_property_only_another_agency_uses_is_not_reported_to_this_one(hand, conn, admin, tmp_path):
