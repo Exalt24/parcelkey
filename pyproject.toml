@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "parcelkey"
+version = "0.1.0"
+description = "Resolve messy Australian style property addresses and contacts into one master property id on PostgreSQL with PostGIS."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = ["psycopg[binary]>=3.2"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "hypothesis>=6"]
+
+[project.scripts]
+parcelkey = "parcelkey.cli:main"
+
+[tool.setuptools]
+packages = ["parcelkey"]
+
+[tool.setuptools.package-data]
+parcelkey = ["migrations/*.sql"]
