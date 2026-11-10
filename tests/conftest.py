@@ -104,7 +104,7 @@ def snapshot(admin_conn, agency: str | None = None) -> dict[str, list[tuple]]:
     out: dict[str, list[tuple]] = {}
     for t in ("agency", "source_load", "source_record", "ingest_reject", "property", "property_link", "quarantine", "contact", "contact_identifier", "contact_link", "contact_merge",
               "contact_quarantine"):
-        rows = admin_conn.execute(f"select * from {t}").fetchall()
+        rows = admin_conn.execute(f"select xmin::text, * from {t}").fetchall()          # xmin changes on every write, even one that stores the same values
         out[t] = sorted(tuple(str(x) for x in r) for r in rows)
     return out
 
