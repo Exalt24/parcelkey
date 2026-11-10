@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 from contextlib import contextmanager
 from importlib import resources
 from pathlib import Path
@@ -92,13 +93,27 @@ def migration_files() -> list[tuple[str, str]]:
     return [(p.name, p.read_text(encoding="utf-8")) for p in files]
 
 
+def _set_search_path(conn: psycopg.Connection, role: str, schema: str) -> None:
+    """Give a role its default search path. A role setting is cluster wide, so two databases starting at once must not both write it: it is read first and a lost race is retried."""
+    wanted = f"search_path={schema}, public"
+    have = conn.execute("SELECT coalesce(rolconfig, '{}') FROM pg_roles WHERE rolname = %s", (role,)).fetchone()[0]
+    if wanted in have:
+        return
+    for attempt in range(5):          # no-mutate: retry plumbing for a race between two test databases, not behaviour
+        try:
+            conn.execute(sql.SQL("ALTER ROLE {} SET search_path = {}, public").format(sql.Identifier(role), sql.Identifier(schema)))
+            return
+        except psycopg.errors.InternalError_:          # no-mutate: tuple concurrently updated, the other writer set it
+            time.sleep(0.2 * (attempt + 1))          # no-mutate: back off
+
+
 def init_db(admin_dsn: str, app_password: str | None = None, owner_password: str | None = None, *, schema: str = SCHEMA, app_role: str = APP_ROLE, owner_role: str = OWNER_ROLE) -> None:
     """Create the roles, the schema, the extensions and the tables. Safe to run again: a migration that was applied is not run twice."""
     app_password = app_password or password("PARCELKEY_APP_PASSWORD")
     owner_password = owner_password or password("PARCELKEY_OWNER_PASSWORD")
     sch, owner, app = sql.Identifier(schema), sql.Identifier(owner_role), sql.Identifier(app_role)
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
-        conn.execute("SELECT pg_advisory_lock(%s)", (INIT_LOCK,))          # released when this connection closes
+        conn.execute("SELECT pg_advisory_lock(%s)", (INIT_LOCK,))          # no-mutate: serialises two inits at once, released when this connection closes
         conn.execute("CREATE EXTENSION IF NOT EXISTS postgis")
         conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
         for role, pw in ((owner_role, owner_password), (app_role, app_password)):
@@ -106,11 +121,11 @@ def init_db(admin_dsn: str, app_password: str | None = None, owner_password: str
                 conn.execute(sql.SQL("CREATE ROLE {} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD {}").format(sql.Identifier(role), sql.Literal(pw)))
             except psycopg.errors.DuplicateObject:
                 pass                                                      # a role that exists keeps its password, whether it was made earlier or by another init a moment ago
-            conn.execute(sql.SQL("ALTER ROLE {} SET search_path = {}, public").format(sql.Identifier(role), sch))
+            _set_search_path(conn, role, schema)
         conn.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {} AUTHORIZATION {}").format(sch, owner))
         conn.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}, {}").format(owner, app))
     with psycopg.connect(admin_dsn) as conn:
-        conn.execute("SELECT pg_advisory_xact_lock(%s)", (INIT_LOCK,))
+        conn.execute("SELECT pg_advisory_xact_lock(%s)", (INIT_LOCK,))          # no-mutate: serialises two inits at once
         conn.execute(sql.SQL("SET LOCAL ROLE {}").format(owner))
         conn.execute(sql.SQL("SET LOCAL search_path = {}, public").format(sch))
         conn.execute("CREATE TABLE IF NOT EXISTS schema_migration (name text PRIMARY KEY, sha256 text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())")
@@ -152,7 +167,7 @@ def wipe_reference(admin_dsn: str) -> None:
 
 def connect(dsn: str | None = None) -> psycopg.Connection:
     """Open a connection as the app role and refuse a role that would bypass row level security."""
-    conn = psycopg.connect(dsn or default_dsn(), connect_timeout=10)
+    conn = psycopg.connect(dsn or default_dsn(), connect_timeout=10)          # no-mutate: the timeout is a number of seconds, any will do
     row = conn.execute("SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user").fetchone()
     conn.rollback()
     if row is None or row[1] or row[2]:

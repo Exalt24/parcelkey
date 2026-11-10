@@ -7,7 +7,7 @@ import test_match_unit as unit_tests
 import test_normalise as normalise_tests
 import test_pipeline as pipeline_tests
 import test_tenant as tenant_tests
-from parcelkey import match, normalise
+from parcelkey import match
 
 
 def test_planted_bug_a_unit_conflict_that_never_conflicts_is_caught(monkeypatch):

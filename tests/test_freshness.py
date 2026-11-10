@@ -81,3 +81,14 @@ def test_each_agency_is_measured_on_its_own(conn, clean, tmp_path):
     h.run(conn, AGENCY, f, now=NOW)
     with db.agency_tx(conn, OTHER) as cur:
         assert check(cur, OTHER, {"crm": timedelta(days=7)}, NOW)[0].status == "MISSING"
+
+
+def test_the_default_maximum_ages_are_a_week_a_day_and_a_month():
+    assert DEFAULT_MAX_AGE == {"crm": timedelta(days=7), "listing": timedelta(days=1), "sales": timedelta(days=31)}
+    assert parse_max_age([]) == {"crm": timedelta(hours=168), "listing": timedelta(hours=24), "sales": timedelta(hours=744)}
+
+
+def test_a_freshness_row_is_immutable():
+    from dataclasses import FrozenInstanceError
+    with pytest.raises(FrozenInstanceError):
+        row("FRESH").status = "STALE"

@@ -17,7 +17,7 @@ from pathlib import Path
 
 import psycopg
 
-from .ingest import SOURCES, row_sha
+from .ingest import SOURCES
 from .master import property_id_for_derived, property_id_for_gnaf
 
 QUARANTINE_REASONS = {"UNPARSEABLE", "AMBIGUOUS_TIE", "BELOW_THRESHOLD", "UNIT_CONFLICT", "LOCALITY_CONFLICT", "NUMBER_TRANSPOSED", "LOT_NO_GEOCODE", "LOT_TOO_FAR"}
@@ -103,8 +103,6 @@ def reconcile(cur: psycopg.Cursor, agency: str, feeds_dir: Path | None = None) -
         fail("ACCOUNTED", f"{neither} records are neither linked nor in open quarantine")
     if pending:
         fail("ACCOUNTED", f"{pending} records have not been normalised")
-    if total != linked + open_q - both + neither:
-        fail("ACCOUNTED", f"{total} records but {linked} links and {open_q} open quarantine rows")
     res.lines.append(f"records    {total} = linked {linked} + quarantined {open_q}")
 
     orphan_link_record = cur.execute("""SELECT count(*) FROM property_link l WHERE l.agency_id = %s

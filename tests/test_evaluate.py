@@ -123,3 +123,71 @@ def test_the_key_of_another_agency_is_ignored(tmp_path):
     rows = [key_row("crm:C1", "clean", "link"), {**key_row("crm:C2", "clean", "link"), "agency_id": "agency-z"}]
     key = write(tmp_path / "key.csv", rows, KEY_COLUMNS)
     assert set(load_key(key, AGENCY)) == {"crm:C1"}
+
+
+# ---- cases added after the mutation check found lines no test pinned ---------------------------------------------------------------------------------
+
+def evaluate_with(conn, tmp_path, rows, truth=None):
+    key = write(tmp_path / "key.csv", rows, KEY_COLUMNS)
+    with db.agency_tx(conn, AGENCY) as cur:
+        return ev.evaluate(cur, AGENCY, load_key(key, AGENCY), truth if truth is not None else load_truth(truth_file(tmp_path)))
+
+
+def test_a_link_is_right_only_when_the_kind_of_property_and_the_key_agree(finished):
+    conn, tmp_path = finished
+    derived = "|||18|SMITH STREET|FAKEVILLE|NSW"
+    res = evaluate_with(conn, tmp_path, [
+        key_row("crm:C1", "x", "link", pid="G12"),                       # linked to G12: right
+        key_row("crm:C5", "x", "link", pid="G12"),                       # linked to a derived property but the key names a pid: wrong
+        key_row("crm:C2", "x", "link", canon=derived),                   # linked to G14 but the key names a derived key: wrong
+        key_row("crm:C7", "x", "link", pid="", canon="")])               # the key names nothing: wrong
+    assert (res["totals"]["resolved"], res["totals"]["wrong"]) == (1, 3)
+
+
+def test_different_unit_merges_are_counted_only_for_a_wrong_link_to_another_unit_of_the_same_building(finished):
+    conn, tmp_path = finished
+    truth = {"GT5": {"pid": "GT5", "building_id": "B30", "unit": "5"}, "GT6": {"pid": "GT6", "building_id": "B30", "unit": "6"}, "G12": {"pid": "G12", "building_id": "B30", "unit": "5"},
+             "G14": {"pid": "G14", "building_id": "B99", "unit": "6"}}
+    rows = [key_row("crm:C3", "x", "link", pid="GT6", building="B30", unit="6"),          # linked GT5: another unit of the same building: counted
+            key_row("crm:C1", "x", "link", pid="GT5", building="B30", unit="5"),          # linked G12: same building, same unit: wrong but not a unit merge
+            key_row("crm:C2", "x", "link", pid="GT5", building="B77", unit="6"),          # linked G14: another building: not counted
+            key_row("crm:C5", "x", "link", pid="GT5", building="", unit="6")]             # no building in the key: not counted
+    assert evaluate_with(conn, tmp_path, rows, truth)["different_unit_merges"] == 1
+
+
+def test_a_link_to_a_derived_property_is_never_a_unit_merge(finished):
+    conn, tmp_path = finished
+    truth = {"GT5": {"pid": "GT5", "building_id": "B30", "unit": "5"}}
+    res = evaluate_with(conn, tmp_path, [key_row("crm:C5", "x", "link", pid="GT5", building="B30", unit="6")], truth)
+    assert res["totals"]["wrong"] == 1 and res["different_unit_merges"] == 0
+
+
+def test_a_person_with_no_contact_record_is_not_a_mention(finished):
+    conn, tmp_path = finished
+    res = evaluate_with(conn, tmp_path, [key_row("crm:NOPE", "x", "link", pid="G12", person="PX", cclass="contact_clean")])
+    assert res["contacts"]["mentions"] == 0 and res["contacts"]["by_class"] == {}
+
+
+def test_a_mention_set_aside_by_the_cap_is_reported_as_set_aside(hand, conn, admin, tmp_path):
+    hand(REFERENCE)
+    rows = [h.crm(f"C{i}", "12 Smith St", name="X", email=f"p{i}@example.com", phone="02 5550 0100") for i in range(4)]
+    h.run(conn, AGENCY, h.write_feeds(tmp_path / "f", crm_rows=rows), max_cluster=3)
+    res = evaluate_with(conn, tmp_path, [key_row(f"crm:C{i}", "x", "link", pid="G12", person=f"P{i}", cclass="contact_clean") for i in range(4)], {})
+    assert res["contacts"]["by_class"]["contact_clean"]["quarantined"] == 1 and res["contacts"]["mentions"] == 4
+
+
+def test_render_prints_each_class_row_and_each_contact_row():
+    ev_ = {"agency": "agency-a", "records": 3, "totals": {"resolved": 1, "wrong": 1, "quarantined": 1, "missed": 0, "unprocessed": 0}, "links_made": 2, "precision": 0.5, "recall": 0.25,
+           "records_expected_to_link": 4, "different_unit_merges": 2,
+           "by_class": {"clean": {"resolved": 1, "wrong": 1, "quarantined": 0, "missed": 0, "unprocessed": 0}, "lot_no_geo": {"resolved": 0, "wrong": 0, "quarantined": 1, "missed": 0, "unprocessed": 0}},
+           "contacts": {"mentions": 4, "true_pairs": 2, "pairs_merged": 1, "pairs_correct": 1, "pair_precision": 1.0, "pair_recall": 0.5,
+                        "by_class": {"name_variant": {"resolved": 3, "missed": 1, "wrong": 0, "quarantined": 0}}}}
+    lines = render(ev_).splitlines()
+    assert lines[0] == "measurement for agency-a against the answer key: 3 records"
+    assert "precision 50.00% (1 of 2)" in lines[2] and "recall 25.00% (of 4 records that should link)" in lines[2]
+    assert lines[3] == "  merges of two different units in one building: 2"
+    assert any(line.split() == ["clean", "2", "1", "0", "0", "1"] for line in lines) and any(line.split() == ["lot_no_geo", "1", "0", "1", "0", "0"] for line in lines)
+    assert any(line.split() == ["name_variant", "4", "3", "1", "0", "0"] for line in lines)
+    assert any("pairwise precision 100.00% (1 of 1 merged pairs), recall 50.00% (1 of 2 true pairs)" in line for line in lines)
+    empty = render({**ev_, "precision": None, "recall": None})
+    assert "precision n/a" in empty and "recall n/a" in empty

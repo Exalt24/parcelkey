@@ -26,7 +26,7 @@ def normalise_record(source: str, raw: dict[str, str]) -> dict:
     """Pure: the normalised columns for one raw row of a source."""
     spec = SOURCES[source]
     get = lambda col: (raw.get(col) or "") if col else ""
-    if spec.suburb or spec.state or spec.postcode:
+    if any((spec.suburb, spec.state, spec.postcode)):
         addr = normalise_address(get(spec.address), get(spec.suburb), get(spec.state), get(spec.postcode))
     else:
         addr = normalise_address(get(spec.address))

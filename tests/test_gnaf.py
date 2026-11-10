@@ -26,8 +26,7 @@ def empty_reference(clean):
     db.wipe(clean, reference=True)
     from conftest import _STATE
     _STATE["reference"] = ""
-    with psycopg.connect(clean) as c:
-        c.execute(f"set search_path = {db.SCHEMA}, public")
+    with psycopg.connect(clean, options=f"-c search_path={db.SCHEMA},public") as c:          # a connection option survives a rollback, a SET inside a transaction does not
         yield c
 
 

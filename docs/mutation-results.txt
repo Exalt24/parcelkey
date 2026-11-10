@@ -1,0 +1,1 @@
+Mutation check results: written by tests/mutation_check.py --summary --write docs/mutation-results.txt after the final run.

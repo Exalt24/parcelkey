@@ -5,7 +5,7 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
+
 
 import pytest
 
@@ -141,3 +141,28 @@ def test_help_lists_every_command():
     out = cli("--help", check=True).stdout
     for name in ("init-db", "load-gnaf", "run", "reconcile", "freshness", "quality", "evaluate", "quarantine", "explain"):
         assert name in out
+
+
+def test_render_prints_every_line_of_a_known_report():
+    report = {
+        "agency": "agency-a", "sources": {"crm": {"stored": 5, "rejected": 2, "unchanged": 1}}, "ingest_rejects": {"DUPLICATE_REF": 2},
+        "records": {"total": 6, "normalised_ok": 5, "unparseable": 1, "missing_postcode": 2, "with_unit": 3, "lot_only": 1, "with_coordinates": 4},
+        "normalisation_rules_fired": {"CASE_FOLDED": 6, "POSTCODE_MISSING": 2}, "links_by_rule": {"EXACT_KEY": 4, "NEW_DERIVED": 1}, "postcode_mismatch_links": 3,
+        "quarantine": {"UNIT_CONFLICT/open": 1}, "properties_used": {"derived": 1, "gnaf": 4},
+        "contacts": {"mentions": 4, "mentions_without_identifier": 1, "invalid_emails": 2, "invalid_phones": 3, "emails_lowercased": 4, "contacts": 3, "merged_away": 1, "quarantined": 0},
+    }
+    text = quality.render(report)
+    assert text.splitlines() == [
+        "data quality for agency-a",
+        "  feed crm      stored     5  rejected   2  unchanged   1",
+        "  rejects: DUPLICATE_REF 2",
+        "  records 6: normalised 5, unparseable 1, no postcode 2, with a unit 3, lot only 1, with coordinates 4",
+        "  rules fired most: CASE_FOLDED 6, POSTCODE_MISSING 2",
+        "  links by rule: EXACT_KEY 4, NEW_DERIVED 1 (postcode did not agree on 3)",
+        "  quarantine: UNIT_CONFLICT/open 1",
+        "  properties used: derived 1, gnaf 4",
+        "  contact mentions 4 -> 3 contacts (1 merged away, 0 set aside); no identifier 1, bad email 2, bad phone 3",
+    ]
+    quiet = {**report, "ingest_rejects": {}, "quarantine": {}}
+    lines = quality.render(quiet).splitlines()
+    assert len(lines) == 8 and "  quarantine: none" in lines and not any(line.startswith("  rejects") for line in lines)

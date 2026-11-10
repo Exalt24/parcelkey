@@ -220,3 +220,93 @@ def test_each_agency_is_reconciled_on_its_own(done):
     with db.agency_tx(conn, "agency-b") as cur:
         res = reconcile(cur, "agency-b")
     assert res.ok and "records    0 = linked 0 + quarantined 0" in "\n".join(res.lines)
+
+
+# ---- cases added after the mutation check found lines no test pinned -------------------------------------------------------------------------------
+
+def test_every_reason_the_matcher_can_give_is_a_known_reason_and_the_reverse():
+    import re
+    from pathlib import Path
+    from parcelkey import match
+    from parcelkey.reconcile import QUARANTINE_REASONS
+    emitted = set(re.findall(r'_set_aside\("([A-Z_]+)"', Path(match.__file__).read_text(encoding="utf-8")))
+    assert emitted == set(QUARANTINE_REASONS)
+
+
+@pytest.mark.parametrize("reason", sorted(__import__("parcelkey.reconcile", fromlist=["x"]).QUARANTINE_REASONS))
+def test_a_known_quarantine_reason_is_never_reported(done, reason):
+    conn, admin, folder = done
+    admin.execute("update quarantine set reason_code = %s where record_id = 'crm:C3'", (reason,))
+    assert check(conn, folder).ok
+
+
+def test_the_duplicate_findings_name_the_pid_and_the_key(done):
+    conn, admin, folder = done
+    admin.execute("alter table property drop constraint property_gnaf_pid_key")
+    admin.execute("""insert into property (property_id, origin, gnaf_pid, canon_key, display_address) select 'pk_g_0000000000000000', origin, gnaf_pid, canon_key, display_address
+                     from property where gnaf_pid = 'G12'""")
+    admin.execute("update property_link set property_id = 'pk_g_0000000000000000' where record_id = 'crm:C1'")
+    res = check(conn, folder)
+    assert any(f.check == "ONE_ID" and "G-NAF pid G12 has two ids" in f.detail for f in res.findings)
+    assert any(f.check == "ONE_ID" and "1 G-NAF pids and 0 derived keys appear on more than one property" in f.detail for f in res.findings)
+    admin.execute("delete from property_link where property_id = 'pk_g_0000000000000000'")
+    admin.execute("delete from property where property_id = 'pk_g_0000000000000000'")
+    admin.execute("alter table property add constraint property_gnaf_pid_key unique (gnaf_pid)")
+
+
+def test_a_duplicate_among_properties_this_agency_does_not_use_is_still_found(done):
+    conn, admin, folder = done
+    admin.execute("drop index property_derived_key_ux")
+    key = admin.execute("select canon_key from property where origin = 'derived'").fetchone()[0]
+    admin.execute("insert into property (property_id, origin, canon_key, display_address) values ('pk_d_0000000000000000', 'derived', %s, 'x')", (key,))
+    res = check(conn, folder)
+    assert [f.detail for f in res.findings if f.check == "ONE_ID"] == ["0 G-NAF pids and 1 derived keys appear on more than one property"]
+    admin.execute("delete from property where property_id = 'pk_d_0000000000000000'")
+    admin.execute("create unique index property_derived_key_ux on property (canon_key) where origin = 'derived'")
+
+
+def test_a_derived_key_with_two_ids_is_named(done):
+    conn, admin, folder = done
+    admin.execute("drop index property_derived_key_ux")
+    key = admin.execute("select canon_key from property where origin = 'derived'").fetchone()[0]
+    admin.execute("insert into property (property_id, origin, canon_key, display_address) values ('pk_d_0000000000000000', 'derived', %s, 'x')", (key,))
+    admin.execute("update property_link set property_id = 'pk_d_0000000000000000' where record_id = 'crm:C4'")
+    res = check(conn, folder)
+    assert any("derived key" in f.detail and "has two ids" in f.detail for f in res.findings) or any("not the one its derivation gives" in f.detail for f in res.findings)
+    admin.execute("delete from property_link where property_id = 'pk_d_0000000000000000'")
+    admin.execute("delete from property where property_id = 'pk_d_0000000000000000'")
+    admin.execute("create unique index property_derived_key_ux on property (canon_key) where origin = 'derived'")
+
+
+def test_one_wrong_id_is_counted_as_one(done):
+    conn, admin, folder = done
+    old = admin.execute("select property_id from property where gnaf_pid = 'G14'").fetchone()[0]
+    admin.execute("set session_replication_role = replica")
+    admin.execute("update property_link set property_id = 'pk_g_deadbeefdeadbeef' where property_id = %s", (old,))
+    admin.execute("update property set property_id = 'pk_g_deadbeefdeadbeef' where property_id = %s", (old,))
+    admin.execute("set session_replication_role = origin")
+    res = check(conn, folder)
+    assert [f.detail for f in res.findings if "derivation" in f.detail] == ["1 properties carry an id that is not the one its derivation gives"]
+
+
+def test_a_load_whose_counts_do_not_add_up_is_found_whichever_count_is_off(done):
+    conn, admin, folder = done
+    admin.execute("update source_load set unchanged = unchanged + 1 where source = 'crm'")
+    res = check(conn, folder)
+    assert "FILE_ROWS" in names(res) and "stored 5 + rejected 0 + unchanged 1" in str(res.findings[0])
+    admin.execute("update source_load set unchanged = 0 where source = 'crm'")
+    admin.execute("update source_load set stored = stored - 1, unchanged = 1 where source = 'crm'")                    # the sum still equals the file, the stored count is wrong
+    res = check(conn, folder)
+    assert names(res) == ["FILE_ROWS"] and "the tables hold 5 and 0" in str(res.findings[0])
+    admin.execute("update source_load set stored = 5, unchanged = -1, rejected = 1 where source = 'crm'")              # the sum still equals the file, the rejected count is wrong
+    res = check(conn, folder)
+    assert names(res) == ["FILE_ROWS"] and "the tables hold 5 and 0" in str(res.findings[0])
+
+
+def test_the_accounting_messages_say_which_count_is_wrong(done):
+    conn, admin, folder = done
+    admin.execute("update source_record set norm_status = 'pending' where record_id = 'crm:C1'")
+    admin.execute("update source_record set norm_status = 'ok' where record_id = 'crm:C1'")
+    admin.execute("delete from property_link where record_id = 'crm:C1'")
+    res = check(conn, folder)
+    assert [f.detail for f in res.findings] == ["1 records are neither linked nor in open quarantine"]

@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 from hypothesis import given, strategies as st
 
-from parcelkey.normalise import (STATE_NAMES, STATES, STREET_TYPE_SPELLINGS, Addr, addr_from_gnaf, canonical_street_type, normalise_address, normalise_email, normalise_name,
+from parcelkey.normalise import (LEVEL_MARKERS, STATE_NAMES, STATES, STREET_TYPE_SPELLINGS, UNIT_MARKERS, Addr, addr_from_gnaf, canonical_street_type, normalise_address, normalise_email, normalise_name,
                                  normalise_phone)
 
 FAKE = ("Fakeville", "NSW", "2000")
@@ -40,6 +40,23 @@ def test_unit_and_level_forms(text, unit, level, number, rules):
     assert (a.unit, a.level, a.number_first) == (unit, level, number)
     assert a.street_name == "SMITH" and a.street_type == "STREET"
     assert rules <= set(a.rules), a.rules
+
+
+@pytest.mark.parametrize("marker", sorted(UNIT_MARKERS))
+def test_every_unit_marker_word(marker):
+    a = normalise_address(f"{marker.title()} 5, 12 Smith St", *FAKE)
+    assert (a.unit, a.number_first, a.street_name) == ("5", "12", "SMITH") and "UNIT_MARKER_WORD" in a.rules
+    glued = normalise_address(f"{marker.title()}5/12 Smith St", *FAKE)
+    assert glued.number_first == "12" and glued.street_name == "SMITH"
+    assert (glued.unit, "UNIT_MARKER_GLUED" in glued.rules) in {("5", True), ("5", False)}
+
+
+@pytest.mark.parametrize("marker", sorted(LEVEL_MARKERS))
+def test_every_level_marker_word(marker):
+    a = normalise_address(f"{marker.title()} 3 Unit 5, 12 Smith St", *FAKE)
+    assert (a.level, a.unit, a.number_first) == ("3", "5", "12") and "LEVEL_MARKER" in a.rules
+    g = normalise_address(f"{marker.title()} Ground Unit 5, 12 Smith St", *FAKE)
+    assert g.level == "G"
 
 
 def test_range_number_is_kept_whole():
@@ -307,3 +324,99 @@ def test_email_lowercase_is_idempotent_and_case_blind(raw, prefix):
     if once:
         assert normalise_email(once) == (once, ())
         assert normalise_email(raw.upper())[0] == once
+
+
+# ---- cases added after the mutation check found lines no test pinned ---------------------------------------------------------------------------------
+
+def test_addr_is_immutable():
+    a = normalise_address("12 Smith St", *FAKE)
+    with pytest.raises(Exception):
+        a.unit = "5"                                              # a frozen dataclass: a decided address cannot be edited by accident
+
+
+def test_a_lone_st_is_not_a_saint():
+    assert normalise_address("12 St", *FAKE).street_name == "ST"
+
+
+def test_whitespace_rule_is_silent_on_clean_text():
+    assert "WHITESPACE_COLLAPSED" not in normalise_address("12 SMITH STREET", "FAKEVILLE", "NSW", "2000").rules
+
+
+@pytest.mark.parametrize("text,building,unit,number", [
+    ("Skyline Tower Level G Unit 2, 12 Smith St", "SKYLINE TOWER", "2", "12"),
+    ("Skyline Tower U5/12 Smith St", "SKYLINE TOWER", "5", "12"),
+    ("Skyline Tower 5/12 Smith St", "SKYLINE TOWER", "5", "12"),
+    ("Skyline Tower 12 Smith St", "SKYLINE TOWER", "", "12"),
+    ("Skyline Tower Lot 7 Smith Rd", "SKYLINE TOWER", "", ""),
+    ("Skyline Tower Floor 3 Unit 5 12 Smith St", "SKYLINE TOWER", "5", "12"),
+    ("Skyline Tower Apt 5 12 Smith St", "SKYLINE TOWER", "5", "12"),
+])
+def test_a_building_name_with_no_comma_ends_at_the_first_unit_level_lot_or_number(text, building, unit, number):
+    a = normalise_address(text, *FAKE)
+    assert (a.building, a.unit, a.number_first) == (building, unit, number) and a.street_name in {"SMITH"}
+
+
+def test_a_marker_followed_by_a_slash_form():
+    a = normalise_address("Unit 5/12 Smith St", *FAKE)
+    assert (a.unit, a.number_first, a.street_name) == ("5", "12", "SMITH") and {"UNIT_MARKER_WORD", "UNIT_SLASH_FORM"} <= set(a.rules)
+    b = normalise_address("Unit 5/12-14 Smith St", *FAKE)
+    assert (b.unit, b.number_first, b.number_last, b.street_name) == ("5", "12", "14", "SMITH")
+
+
+def test_one_line_tail_rules():
+    a = normalise_address("12 Smith St, Fakeville New South Wales 2000")
+    assert a.state == "NSW" and "STATE_NAME_TO_CODE" in a.rules
+    b = normalise_address("12 Smith St, Fakeville NSW 20000")
+    assert b.postcode == "" and "POSTCODE_BAD_SHAPE" in b.rules and b.state == "NSW"
+    c = normalise_address("12 Smith NSW 2000")
+    assert (c.street_name, c.street_type, c.locality, c.state, c.postcode) == ("SMITH", "", "", "NSW", "2000")
+    d = normalise_address("12 Parade St Fakeville NSW 2000")
+    assert (d.street_name, d.street_type, d.locality) == ("PARADE", "STREET", "FAKEVILLE")
+
+
+@pytest.mark.parametrize("kwargs", [dict(suburb="Fakeville"), dict(state="NSW"), dict(postcode="2000")])
+def test_any_one_separate_field_switches_off_reading_the_tail(kwargs):
+    a = normalise_address("12 Smith St, Elsewhere VIC 3000", **kwargs)
+    assert "SUBURB_FROM_LINE" not in a.rules
+
+
+def test_a_bad_separate_state_is_left_empty():
+    a = normalise_address("12 Smith St", "Fakeville", "Narnia", "2000")
+    assert a.state == "" and "STATE_MISSING" in a.rules
+
+
+@pytest.mark.parametrize("text,building", [
+    ("Tower, 12 Smith St", "TOWER"),
+    ("Skyline Tower, 12 Smith St", "SKYLINE TOWER"),
+    ("Tower 5/12 Smith St", "TOWER"),
+    ("Tower Unit 5/12 Smith St", "TOWER"),
+    ("Tower Level 3 Unit 5, 12 Smith St", "TOWER"),
+])
+def test_a_one_word_building_and_a_building_followed_by_a_marker_and_a_slash_form(text, building):
+    a = normalise_address(text, *FAKE)
+    assert a.building == building and a.number_first == "12" and a.street_name == "SMITH"
+
+
+def test_a_state_alone_or_a_postcode_alone_ends_a_one_line_address():
+    a = normalise_address("12 Smith St Fakeville NSW")
+    assert (a.street_name, a.locality, a.state, a.postcode) == ("SMITH", "FAKEVILLE", "NSW", "")
+    b = normalise_address("12 Smith St Fakeville 2000")
+    assert (b.street_name, b.locality, b.state, b.postcode) == ("SMITH", "FAKEVILLE", "", "2000")
+
+
+def test_saint_is_expanded_at_the_end_of_a_suburb_and_not_at_the_end_of_a_street_name():
+    assert normalise_address("12 Smith St", "Port St", "NSW", "2000").locality == "PORT SAINT"
+    row = dict(street_name="OXFORD ST", street_type_code="STREET", locality_name="PORT ST", state_abbreviation="NSW", postcode="2000", number_first=1)
+    a = addr_from_gnaf(row)
+    assert (a.street_name, a.locality) == ("OXFORD ST", "PORT SAINT")
+
+
+def test_a_foreign_number_is_not_read_as_an_australian_one():
+    assert normalise_phone("+55 412 345 678")[0] == "" and normalise_phone("+55 412 345 678")[1] == ("PHONE_INVALID",)
+    assert normalise_phone("+1 612 345 6789")[0] == ""
+    assert normalise_phone("61 2345 678")[0] == ""                                # ten digits with no plus: not a country code
+
+
+def test_a_unit_written_with_only_a_letter_is_not_read_as_a_unit():
+    a = normalise_address("Tower Unit G 12 Smith St", *FAKE)
+    assert (a.building, a.unit, a.number_first) == ("TOWER UNIT G", "", "12")

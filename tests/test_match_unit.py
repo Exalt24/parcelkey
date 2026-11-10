@@ -108,8 +108,8 @@ def test_range_numbers():
     assert numbers_equal(A(number="12", last="14"), A(number="12", last="14"))
     assert numbers_equal(A(number="12", last="14"), A(number="12"))
     assert numbers_equal(A(number="12"), A(number="12", last="14"))
-    assert not numbers_equal(A(number="12", last="14"), A(number="12", last="16"))
-    assert not numbers_equal(A(number="12"), A(number="13"))
+    assert numbers_equal(A(number="12", last="14"), A(number="12", last="16")) is False
+    assert numbers_equal(A(number="12"), A(number="13")) is False
 
 
 def test_locality_and_state_agreement():
@@ -239,5 +239,74 @@ def test_a_link_never_pairs_two_different_units(seed):
         assert chosen.addr.unit == rec.unit
 
 
+def test_decisions_and_settings_are_immutable():
+    from dataclasses import FrozenInstanceError
+    for obj, field in ((Decision("link", "EXACT_KEY"), "rule"), (MatchConfig(), "threshold"), (C("P1", A()), "pid")):
+        with pytest.raises(FrozenInstanceError):
+            setattr(obj, field, "x")
+
+
 def test_decision_is_a_plain_value():
     assert Decision("link", "EXACT_KEY", 1.0, "P1") == Decision("link", "EXACT_KEY", 1.0, "P1")
+
+
+# ---- cases added after the mutation check found lines no test pinned ---------------------------------------------------------------------------------
+
+def test_a_set_aside_decision_carries_its_reason_as_its_rule():
+    d = decide(A(number="21"), None, None, [C("P12", A(number="12"))], CFG)
+    assert d.rule == d.reason == "NUMBER_TRANSPOSED"
+    assert decide(A(), None, None, [C("P1", A()), C("P2", A())], CFG).rule == "AMBIGUOUS_TIE"
+    assert decide(A(unit="5"), None, None, [C("P1", A(unit="6"))], CFG).rule == "UNIT_CONFLICT"
+    assert decide(A(locality="FAKEVILLE"), None, None, [C("P1", A(locality="OTHERTON"))], CFG).rule == "LOCALITY_CONFLICT"
+    assert decide(Addr(), None, None, [], CFG).rule == "UNPARSEABLE"
+    assert decide(A(street="X"), None, None, [C("P1", A(street="XY"), sim=0.4)], MatchConfig(threshold=0.9)).rule == "BELOW_THRESHOLD"
+    assert decide(lot_rec(), None, None, [C("PN", A(number="23", lot="7", typ="ROAD"))], CFG).rule == "LOT_NO_GEOCODE"
+    assert decide(lot_rec(), -33.8, 151.0, [C("PN", A(number="23", lot="7", typ="ROAD"), dist=900.0)], CFG).rule == "LOT_TOO_FAR"
+    both = [C("PA", A(number="", lot="7", typ="ROAD")), C("PB", A(number="", lot="7", typ="ROAD"))]
+    assert decide(lot_rec(), None, None, both, CFG).rule == "AMBIGUOUS_TIE"
+    two_near = [C("P1", A(number="23", lot="7", typ="ROAD"), dist=10.0), C("P2", A(number="25", lot="7", typ="ROAD"), dist=20.0)]
+    assert decide(lot_rec(), -33.8, 151.0, two_near, CFG).rule == "AMBIGUOUS_TIE"
+
+
+def test_a_lot_that_is_not_in_the_reference_is_a_new_derived_property_by_rule():
+    d = decide(lot_rec(), None, None, [], CFG)
+    assert (d.outcome, d.rule, d.score) == ("new", "NEW_DERIVED", 1.0)
+
+
+def test_candidate_detail_keeps_the_five_best_with_rounded_scores():
+    cands = [C(f"P{i}", A(), sim=0.9 - i * 0.001234) for i in range(8)]
+    d = decide(A(), None, None, cands, CFG)
+    detail = d.detail["candidates"]
+    assert len(detail) == 5 and [c["pid"] for c in detail] == ["P0", "P1", "P2", "P3", "P4"] and detail[1]["sim"] == round(0.9 - 0.001234, 4)
+
+
+def test_two_exact_candidates_are_a_tie_whatever_the_threshold():
+    d = decide(A(), None, None, [C("P1", A()), C("P2", A())], MatchConfig(threshold=2.0))
+    assert d.reason == "AMBIGUOUS_TIE"
+
+
+def test_the_score_of_a_near_miss_is_rounded_to_four_places():
+    d = decide(A(street="HARWIK"), None, None, [C("P1", A(street="HARWICK"), sim=0.714285714)], MatchConfig(threshold=0.6))
+    assert d.score == 0.7143
+
+
+def test_a_record_with_a_lot_and_a_street_number_is_matched_by_its_number():
+    rec = A(number="23", lot="7", street="BASE", typ="ROAD")
+    d = decide(rec, None, None, [C("PN", A(number="23", lot="9", street="BASE", typ="ROAD"))], CFG)
+    assert (d.outcome, d.rule, d.pid) == ("link", "EXACT_KEY", "PN")
+
+
+def test_a_lot_record_with_only_one_coordinate_has_no_geocode():
+    numbered = C("PN", A(number="23", lot="7", typ="ROAD"), dist=5.0)
+    assert decide(lot_rec(), -33.8, None, [numbered], CFG).reason == "LOT_NO_GEOCODE"
+    assert decide(lot_rec(), None, 151.0, [numbered], CFG).reason == "LOT_NO_GEOCODE"
+
+
+def test_the_nearest_distance_is_reported_to_a_tenth_of_a_metre():
+    c = C("PN", A(number="23", lot="7", typ="ROAD"), dist=50.14)
+    assert decide(lot_rec(), -33.8, 151.0, [c], MatchConfig(lot_distance_m=50.0)).detail["nearest_m"] == 50.1
+
+
+def test_the_lot_score_is_one_minus_the_share_of_the_distance_rounded_to_four_places():
+    c = C("PN", A(number="23", lot="7", typ="ROAD"), dist=33.333)
+    assert decide(lot_rec(), -33.8, 151.0, [c], MatchConfig(lot_distance_m=50.0)).score == 0.3333

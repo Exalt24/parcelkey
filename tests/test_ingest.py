@@ -8,7 +8,7 @@ import pytest
 
 import helpers as h
 from conftest import AGENCY, snapshot
-from parcelkey import db
+
 from parcelkey.db import agency_tx
 from parcelkey.ingest import SOURCES, FeedRefused, ingest_file, read_feed, row_sha
 from parcelkey.records import normalise_pending
@@ -141,3 +141,44 @@ def test_read_feed_gives_sha_and_numbered_rows(tmp_path):
     sha, rows = read_feed(folder / "sales_history.csv", "sales")
     assert len(sha) == 64 and [n for n, _ in rows] == [2, 3] and rows[0][1]["sale_ref"] == "S1"
     assert row_sha({"a": "1", "b": "2"}) == row_sha({"b": "2", "a": "1"}) != row_sha({"a": "1", "b": "3"})
+
+
+def test_a_lot_only_address_is_usable_and_a_half_given_coordinate_pair_is_dropped(conn, admin, tmp_path):
+    folder = h.write_feeds(tmp_path / "f", listing_rows=[h.listing("L1", "Lot 7 Smith Rd"), h.listing("L2", "12 Smith St", lat="-33.8", lon=""), h.listing("L3", "12 Smith St", lat="", lon="151.0"),
+                                                          h.listing("L4", "12 Smith St")])
+    ingest(conn, folder / "listing_feed.csv", "listing")
+    with agency_tx(conn, AGENCY) as cur:
+        normalise_pending(cur, AGENCY)
+    got = {r[0]: r[1:] for r in admin.execute("select source_ref, norm_status, geog is not null, 'COORDS_OUT_OF_RANGE' = any(norm_rules) from source_record").fetchall()}
+    assert got == {"L1": ("ok", False, False), "L2": ("ok", False, True), "L3": ("ok", False, True), "L4": ("ok", False, False)}
+
+
+def test_the_load_row_keeps_the_counts_and_the_agency_is_registered(conn, admin, tmp_path):
+    folder = h.write_feeds(tmp_path / "f", crm_rows=[h.crm("C1", "12 Smith St"), h.crm("", "5 Rose Rd"), h.crm("C3", "7 Elm Ct")])
+    r = ingest(conn, folder / "crm_export.csv", "crm")
+    assert admin.execute("select row_count, stored, rejected, unchanged, file_name, source from source_load").fetchall() == [(3, 2, 1, 0, "crm_export.csv", "crm")]
+    assert admin.execute("select agency_id from agency").fetchall() == [(AGENCY,)] and (r.row_count, r.stored, r.rejected, r.unchanged) == (3, 2, 1, 0)
+
+
+def test_a_skipped_file_reports_zero_counts(conn, tmp_path):
+    folder = h.write_feeds(tmp_path / "f", crm_rows=[h.crm("C1", "12 Smith St")])
+    ingest(conn, folder / "crm_export.csv", "crm")
+    r = ingest(conn, folder / "crm_export.csv", "crm")
+    assert (r.status, r.row_count, r.stored, r.rejected, r.unchanged) == ("skipped", 0, 0, 0, 0)
+
+
+def test_a_repeated_unchanged_row_in_a_later_file_is_unchanged_once_and_a_duplicate_after(conn, admin, tmp_path):
+    a = h.write_feeds(tmp_path / "a", crm_rows=[h.crm("C1", "12 Smith St")])
+    b = h.write_feeds(tmp_path / "b", crm_rows=[h.crm("C1", "12 Smith St"), h.crm("C1", "12 Smith St"), h.crm("C2", "5 Rose Rd")])
+    ingest(conn, a / "crm_export.csv", "crm")
+    r = ingest(conn, b / "crm_export.csv", "crm")
+    assert (r.row_count, r.stored, r.rejected, r.unchanged) == (3, 1, 1, 1)
+    assert admin.execute("select reason_code from ingest_reject").fetchall() == [("DUPLICATE_REF",)]
+
+
+def test_the_row_hash_is_the_sha256_of_sorted_json_that_keeps_unicode():
+    import hashlib
+    from dataclasses import FrozenInstanceError
+    assert row_sha({"b": "é", "a": "1"}) == hashlib.sha256('{"a": "1", "b": "é"}'.encode("utf-8")).hexdigest()
+    with pytest.raises(FrozenInstanceError):
+        SOURCES["crm"].file = "x"

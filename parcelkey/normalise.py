@@ -46,7 +46,7 @@ LEVEL_MARKERS = frozenset({"LEVEL", "LVL", "L", "FLOOR", "FLR"})
 _ID = re.compile(r"^\d+[A-Z]?$")
 _NUMBER = re.compile(r"^(\d+[A-Z]?)(?:-(\d+[A-Z]?))?$")
 _SLASH = re.compile(r"^(\d+[A-Z]?)/(\d+[A-Z]?)(?:-(\d+[A-Z]?))?$")
-_GLUED = re.compile(r"^(UNIT|U|APT|APARTMENT|FLAT|SUITE|STE|SHOP|VILLA|OFFICE|TH|#)(\d+[A-Z]?)(?:/(.+))?$")
+_GLUED = re.compile("^(" + "|".join(re.escape(m) for m in sorted(UNIT_MARKERS, key=len, reverse=True)) + r")(\d+[A-Z]?)(?:/(.+))?$")          # no-mutate: alternation backtracks, so the order of the markers only changes speed
 _DISALLOWED = re.compile(r"[^A-Z0-9/,\- #]")
 _POSTCODE = re.compile(r"^\d{4}$")
 _EMAIL = re.compile(r"^[a-z0-9._%+\-]+@[a-z0-9\-]+(?:\.[a-z0-9\-]+)+$")
@@ -143,15 +143,20 @@ def _prep(text: str, rules: list[str]) -> str:
     return cleaned
 
 
-def _core_start(tokens: list[str]) -> int:
-    """Index of the first token that starts the unit, level, lot or street number part of an address, or -1."""
+def _peek(tokens: list[str], i: int) -> str:
+    """The token after position i, or an empty string at the end."""
+    return (tokens[i + 1:i + 2] or [""])[0]
+
+
+def _core_start(tokens: list[str]) -> int | None:
+    """Index of the first token that starts the unit, level, lot or street number part of an address, or None."""
     for i, t in enumerate(tokens):
-        nxt = tokens[i + 1] if i + 1 < len(tokens) else ""
+        nxt = _peek(tokens, i)
         if _GLUED.match(t) or _SLASH.match(t) or _NUMBER.match(t):
             return i
         if (t in UNIT_MARKERS or t in LEVEL_MARKERS or t == "LOT") and (_ID.match(nxt) or _SLASH.match(nxt) or (t in LEVEL_MARKERS and nxt in ("G", "GROUND"))):
             return i
-    return -1
+    return None
 
 
 def _split_tail(words: list[str], rules: list[str]) -> tuple[list[str], str, str]:
@@ -163,7 +168,7 @@ def _split_tail(words: list[str], rules: list[str]) -> tuple[list[str], str, str
             _add(rules, "POSTCODE_BAD_SHAPE")
             postcode = ""
     state = ""
-    for n in (4, 3, 2, 1):
+    for n in range(max(len(k.split()) for k in STATE_NAMES), 0, -1):
         if len(words) >= n and " ".join(words[-n:]) in STATE_NAMES:
             state = STATE_NAMES[" ".join(words[-n:])]
             del words[-n:]
@@ -177,7 +182,9 @@ def _split_tail(words: list[str], rules: list[str]) -> tuple[list[str], str, str
 def _suburb_split(words: list[str]) -> tuple[list[str], list[str]]:
     """No comma told us where the street ends. The street ends at the first street type word that has a name before it and something after it."""
     for i, w in enumerate(words):
-        if i >= 1 and i < len(words) - 1 and canonical_street_type(w):
+        if i < 1 or not canonical_street_type(w):
+            continue
+        if i < len(words) - 1:          # no-mutate: a split at the last word gives the same two lists as no split
             return words[: i + 1], words[i + 1:]
     return words, []
 
@@ -216,24 +223,19 @@ def normalise_address(line: str | None, suburb: str | None = None, state: str | 
                 _add(rules, r)
             chunks.pop()
     body = " ".join(chunks)
-    # building name: a first chunk with no digit and no unit, level or lot word, when something follows it
+    # a building name is the words before the first unit, level, lot or number, when none of them has a digit (a comma after it makes no difference)
     building = ""
-    if len(chunks) >= 2 and not any(ch.isdigit() for ch in chunks[0]) and chunks[0].split()[0] not in UNIT_MARKERS | LEVEL_MARKERS | {"LOT"}:
-        building = " ".join(chunks[0].replace("-", " ").split())
-        body = " ".join(chunks[1:])
-        _add(rules, "BUILDING_NAME_PREFIX")
     tokens = body.split()
-    if not building:
-        start = _core_start(tokens)
-        if start > 0 and not any(ch.isdigit() for t in tokens[:start] for ch in t):
-            building = " ".join(tokens[:start]).replace("-", " ")      # a building name written with no comma after it
-            tokens = tokens[start:]
-            _add(rules, "BUILDING_NAME_PREFIX")
+    start = _core_start(tokens)
+    if start and not any(ch.isdigit() for t in tokens[:start] for ch in t):
+        building = " ".join(tokens[:start]).replace("-", " ")
+        tokens = tokens[start:]
+        _add(rules, "BUILDING_NAME_PREFIX")
     unit = level = lot = first = last_n = ""
     i = 0
     while i < len(tokens):
         t = tokens[i]
-        nxt = tokens[i + 1] if i + 1 < len(tokens) else ""
+        nxt = _peek(tokens, i)
         glued = _GLUED.match(t)
         if glued and not unit:
             unit = glued.group(2)

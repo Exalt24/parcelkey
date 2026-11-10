@@ -48,12 +48,10 @@ def ensure_derived_property(cur: psycopg.Cursor, addr: Addr, lat: float | None =
     """Make sure the master list has the property for an address that is not in G-NAF. Returns (its id, whether this call added it)."""
     key = addr.canon_key
     property_id = property_id_for_derived(key)
-    if lat is None or lon is None:
-        lat = lon = None
     cur.execute(
         """INSERT INTO property (property_id, origin, gnaf_pid, canon_key, display_address, postcode, state, geog)
-           VALUES (%s, 'derived', NULL, %s, %s, %s, %s, CASE WHEN %s::float8 IS NULL THEN NULL ELSE ST_SetSRID(ST_MakePoint(%s::float8, %s::float8), 4326)::geography END)
+           VALUES (%s, 'derived', NULL, %s, %s, %s, %s, CASE WHEN %s::float8 IS NULL OR %s::float8 IS NULL THEN NULL ELSE ST_SetSRID(ST_MakePoint(%s::float8, %s::float8), 4326)::geography END)
            ON CONFLICT (property_id) DO NOTHING""",
-        (property_id, key, addr.line(), addr.postcode, addr.state, lon, lon, lat),
+        (property_id, key, addr.line(), addr.postcode, addr.state, lon, lat, lon, lat),
     )
     return property_id, cur.rowcount == 1

@@ -163,3 +163,27 @@ def test_the_clusters_do_not_depend_on_the_order_of_the_rows(clean, conn, admin,
             by.setdefault(cid, set()).add(rid)
         clusters.append(sorted(sorted(v) for v in by.values()))
     assert clusters[0] == clusters[1]
+
+
+# ---- cases added after the mutation check found lines no test pinned ---------------------------------------------------------------------------------
+
+def test_the_default_cap_is_eight_records_to_a_contact(clean, conn, admin, tmp_path):
+    from parcelkey.contacts import DEFAULT_MAX_CLUSTER, ContactCounts
+    assert DEFAULT_MAX_CLUSTER == 8 and ContactCounts().new == 0 and ContactCounts().records == 0
+    rows = [person(f"C{i}", f"P{i}", f"p{i}@example.com", "02 5550 0100") for i in range(9)]
+    r, links = resolve(conn, admin, tmp_path, rows)
+    assert len(links) == 8 and r.contacts.quarantined == 1 and set(admin.execute("select record_id from contact_quarantine").fetchone()) == {"crm:C8"}
+
+
+def test_the_counts_say_how_each_mention_was_resolved(clean, conn, admin, tmp_path):
+    rows = [person("C1", "A", "a@example.com"), person("C2", "A", "A@example.com"), person("C3", "B", "", "02 5550 0002"), person("C4", "B", "", "02 5550 0002"), person("C5", "C", "", "")]
+    r, _ = resolve(conn, admin, tmp_path, rows)
+    c = r.contacts
+    assert (c.records, c.new, c.merged, c.quarantined) == (5, 3, 0, 0) and c.linked == {"NEW": 2, "NO_IDENTIFIER": 1, "EMAIL": 1, "PHONE": 1}
+
+
+def test_a_bridging_mention_is_ruled_a_bridge_and_a_contact_with_nothing_to_match_on_has_its_own_rule(clean, conn, admin, tmp_path):
+    rows = [person("C1", "A", "a@example.com", ""), person("C2", "A", "", "02 5550 0001"), person("C3", "A", "a@example.com", "02 5550 0001"), person("C4", "Z", "", "")]
+    r, _ = resolve(conn, admin, tmp_path, rows)
+    assert admin.execute("select record_id, rule from contact_link order by 1").fetchall() == [("crm:C1", "NEW"), ("crm:C2", "NEW"), ("crm:C3", "BRIDGE"), ("crm:C4", "NO_IDENTIFIER")]
+    assert r.contacts.linked == {"NEW": 2, "BRIDGE": 1, "NO_IDENTIFIER": 1} and r.contacts.new == 3 and r.contacts.merged == 1

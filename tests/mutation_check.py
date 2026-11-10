@@ -54,7 +54,7 @@ TARGETS = {
     "evaluate": (["tests/test_evaluate.py"], 300, True),
     "gnaf": (["tests/test_gnaf.py"], 300, True),
     "quality": (["tests/test_quality_cli.py", "-k", "quality"], 300, True),
-    "db": (["tests/test_tenant.py", "tests/test_ingest.py"], 300, True),
+    "db": (["tests/test_db.py", "tests/test_tenant.py", "tests/test_ingest.py"], 300, True),
 }
 FILES = {name: f"parcelkey/{name}.py" for name in TARGETS}
 DEFAULT_MODULES = tuple(TARGETS)

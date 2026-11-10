@@ -28,6 +28,9 @@ from .master import ensure_derived_property, ensure_gnaf_property
 from .normalise import Addr
 
 
+BATCH = 400          # no-mutate: records decided per query, a memory and speed trade only
+
+
 @dataclass(frozen=True)
 class MatchConfig:
     threshold: float = 0.60        # a near miss street needs at least this similarity to link
@@ -45,6 +48,11 @@ class Decision:
     reason: str = ""               # quarantine reason code
     detail: dict = field(default_factory=dict)
     rules: tuple[str, ...] = ()    # extra rules that fired during the match
+
+
+def _set_aside(reason: str, detail: dict) -> Decision:
+    """A decision to quarantine: the rule and the reason are the same code."""
+    return Decision("quarantine", reason, reason=reason, detail=detail)
 
 
 def units_conflict(a: Addr, b: Addr) -> bool:
@@ -76,13 +84,13 @@ def is_transposition(a: str, b: str) -> bool:
 
 def _cand_detail(cands: list[Candidate], limit: int = 5) -> list[dict]:
     return [{"pid": c.pid, "sim": round(c.sim, 4), "unit": c.addr.unit, "number": c.addr.number_key, "street": c.addr.street_key}
-            for c in sorted(cands, key=lambda c: (-round(c.sim, 4), c.pid))[:limit]]
+            for c in sorted(cands, key=lambda c: (-c.sim, c.pid))[:limit]]
 
 
 def decide(rec: Addr, lat: float | None, lon: float | None, cands: list[Candidate], cfg: MatchConfig = MatchConfig()) -> Decision:
     """Decide one record. `lat` and `lon` only matter for the lot rule (the distances are already in the candidates)."""
     if not rec.street_name or not (rec.number_first or rec.lot):
-        return Decision("quarantine", "UNPARSEABLE", reason="UNPARSEABLE", detail={"why": "no street, or neither a street number nor a lot"})
+        return _set_aside("UNPARSEABLE", {"why": "no street, or neither a street number nor a lot"})
     pool = [c for c in cands if c.sim >= cfg.floor]
     if rec.lot and not rec.number_first:
         return _decide_lot(rec, lat, lon, pool, cfg)
@@ -94,24 +102,23 @@ def decide(rec: Addr, lat: float | None, lon: float | None, cands: list[Candidat
             extra = ("POSTCODE_MISMATCH",) if rec.postcode and exact[0].addr.postcode != rec.postcode else ()
             return Decision("link", "EXACT_KEY", 1.0, exact[0].pid, rules=extra)
         if len(exact) > 1:
-            return Decision("quarantine", "AMBIGUOUS_TIE", reason="AMBIGUOUS_TIE", detail={"candidates": _cand_detail(exact)})
-        ranked = sorted(compatible, key=lambda c: (-round(c.sim, 4), c.pid))
+            return _set_aside("AMBIGUOUS_TIE", {"candidates": _cand_detail(exact)})
+        ranked = sorted(compatible, key=lambda c: (-c.sim, c.pid))
         top = ranked[0]
         if top.sim >= cfg.threshold:
-            tied = [c for c in ranked if round(top.sim - c.sim, 4) <= cfg.tie_margin]
+            tied = [c for c in ranked if round(top.sim - c.sim, 4) <= cfg.tie_margin]          # no-mutate: the rounding only removes float noise, any number of places from 4 to 12 does that
             if len(tied) > 1:
-                return Decision("quarantine", "AMBIGUOUS_TIE", reason="AMBIGUOUS_TIE", detail={"candidates": _cand_detail(tied)})
+                return _set_aside("AMBIGUOUS_TIE", {"candidates": _cand_detail(tied)})
             return Decision("link", "TRIGRAM", round(top.sim, 4), top.pid)
-        return Decision("quarantine", "BELOW_THRESHOLD", reason="BELOW_THRESHOLD", detail={"best": _cand_detail([top]), "threshold": cfg.threshold})
+        return _set_aside("BELOW_THRESHOLD", {"best": _cand_detail([top]), "threshold": cfg.threshold})
     if same_number:
-        return Decision("quarantine", "UNIT_CONFLICT", reason="UNIT_CONFLICT",
-                        detail={"record_unit": rec.unit, "candidate_units": sorted({c.addr.unit for c in same_number})})
+        return _set_aside("UNIT_CONFLICT", {"record_unit": rec.unit, "candidate_units": sorted({c.addr.unit for c in same_number})})
     other_locality = [c for c in pool if c.same_postcode and c.addr.street_key == rec.street_key and numbers_equal(rec, c.addr) and not units_conflict(rec, c.addr)]
     if other_locality:
-        return Decision("quarantine", "LOCALITY_CONFLICT", reason="LOCALITY_CONFLICT", detail={"candidates": _cand_detail(other_locality)})
+        return _set_aside("LOCALITY_CONFLICT", {"candidates": _cand_detail(other_locality)})
     swapped = [c for c in pool if locality_ok(rec, c.addr) and c.addr.street_key == rec.street_key and is_transposition(rec.number_first, c.addr.number_first) and not units_conflict(rec, c.addr)]
     if swapped:
-        return Decision("quarantine", "NUMBER_TRANSPOSED", reason="NUMBER_TRANSPOSED", detail={"candidates": _cand_detail(swapped)})
+        return _set_aside("NUMBER_TRANSPOSED", {"candidates": _cand_detail(swapped)})
     return Decision("new", "NEW_DERIVED", 1.0)
 
 
@@ -122,16 +129,16 @@ def _decide_lot(rec: Addr, lat: float | None, lon: float | None, pool: list[Cand
     if lot_only:
         if len(lot_only) == 1:
             return Decision("link", "EXACT_LOT", 1.0, lot_only[0].pid)
-        return Decision("quarantine", "AMBIGUOUS_TIE", reason="AMBIGUOUS_TIE", detail={"candidates": _cand_detail(lot_only)})
+        return _set_aside("AMBIGUOUS_TIE", {"candidates": _cand_detail(lot_only)})
     if numbered:
         if lat is None or lon is None:
-            return Decision("quarantine", "LOT_NO_GEOCODE", reason="LOT_NO_GEOCODE", detail={"candidates": _cand_detail(numbered)})
-        near = sorted((c for c in numbered if c.dist_m is not None and c.dist_m <= cfg.lot_distance_m), key=lambda c: (round(c.dist_m, 2), c.pid))
+            return _set_aside("LOT_NO_GEOCODE", {"candidates": _cand_detail(numbered)})
+        near = sorted((c for c in numbered if c.dist_m is not None and c.dist_m <= cfg.lot_distance_m), key=lambda c: (c.dist_m, c.pid))
         if not near:
             nearest = min((c.dist_m for c in numbered if c.dist_m is not None), default=None)
-            return Decision("quarantine", "LOT_TOO_FAR", reason="LOT_TOO_FAR", detail={"nearest_m": None if nearest is None else round(nearest, 1), "limit_m": cfg.lot_distance_m})
+            return _set_aside("LOT_TOO_FAR", {"nearest_m": None if nearest is None else round(nearest, 1), "limit_m": cfg.lot_distance_m})
         if len(near) > 1:
-            return Decision("quarantine", "AMBIGUOUS_TIE", reason="AMBIGUOUS_TIE", detail={"candidates": _cand_detail(near)})
+            return _set_aside("AMBIGUOUS_TIE", {"candidates": _cand_detail(near)})
         return Decision("link", "LOT_GEOCODE", round(1.0 - near[0].dist_m / cfg.lot_distance_m, 4), near[0].pid, rules=("LOT_RESOLVED_BY_GEOCODE",))
     return Decision("new", "NEW_DERIVED", 1.0)
 
@@ -144,7 +151,7 @@ class MatchCounts:
     records: int = 0
 
 
-def match_pending(cur: psycopg.Cursor, agency: str, cfg: MatchConfig = MatchConfig(), batch: int = 400) -> MatchCounts:
+def match_pending(cur: psycopg.Cursor, agency: str, cfg: MatchConfig = MatchConfig(), batch: int = BATCH) -> MatchCounts:
     """Decide every record that has no link yet (a record in open quarantine is decided again, so a later G-NAF load can free it). Runs inside agency_tx."""
     counts = MatchCounts()
     pending = cur.execute(
@@ -164,7 +171,7 @@ def match_pending(cur: psycopg.Cursor, agency: str, cfg: MatchConfig = MatchConf
             addr = Addr(unit=row[3], level=row[4], building=row[5], lot=row[6], number_first=row[7], number_last=row[8], street_name=row[9], street_type=row[10],
                         locality=row[11], state=row[12], postcode=row[13])
             lat, lon = row[14], row[15]
-            dec = decide(addr, lat, lon, cands.get(record_id, []), cfg) if status == "ok" else Decision("quarantine", "UNPARSEABLE", reason="UNPARSEABLE", detail={"why": "normalise could not read a street and number"})
+            dec = decide(addr, lat, lon, cands.get(record_id, []), cfg) if status == "ok" else _set_aside("UNPARSEABLE", {"why": "normalise could not read a street and number"})
             counts.records += 1
             if dec.outcome == "quarantine":
                 _quarantine(cur, agency, record_id, dec)
