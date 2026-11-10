@@ -34,4 +34,4 @@ Results are in [mutation-results.txt](mutation-results.txt). The recorded run se
 
 ## Where the tests have run
 
-A GitHub Actions workflow is configured in `.github/workflows/ci.yml` and has not run: this repository has no remote yet. Every figure in these docs comes from runs on one Windows 11 machine with Python 3.13 and PostgreSQL 16 with PostGIS 3.4 in Docker. After the first push the badge in the README is checked against that first run.
+The GitHub Actions workflow in `.github/workflows/ci.yml` runs the whole suite on Ubuntu against a `postgis/postgis:16-3.4` service container, and its first run after the repository went public was green. Every figure in these docs comes from runs on one Windows 11 machine with Python 3.13 and PostgreSQL 16 with PostGIS 3.4 in Docker.

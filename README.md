@@ -94,7 +94,7 @@ python -m pytest             # 788 tests, about five minutes
 python tests/mutation_check.py --module normalise     # one module at a time; --guards runs the named guards; --summary totals them
 ```
 
-What the suites cover, the planted bugs and how the mutation check works are in [docs/tests.md](docs/tests.md). The mutation results are in [docs/mutation-results.txt](docs/mutation-results.txt). A CI workflow is configured and has not run, because this repository has no remote yet. The tests have run on Windows 11 with Python 3.13 only.
+What the suites cover, the planted bugs and how the mutation check works are in [docs/tests.md](docs/tests.md). The mutation results are in [docs/mutation-results.txt](docs/mutation-results.txt). The CI workflow runs the whole suite against a PostGIS service container on Ubuntu, and its first run on GitHub was green. The figures in this README come from runs on one Windows 11 machine with Python 3.13.
 
 ## What was hard
 
