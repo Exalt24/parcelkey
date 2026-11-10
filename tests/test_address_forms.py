@@ -278,3 +278,76 @@ def test_class_blank_state_column_keeps_one_canonical_key():
     rows.append((("the postcode is still not part of the key",), normalise_address("7 Quandong Cl", "Correby", "NSW", "2999").canon_key, full.canon_key))
     rows.append((("a G-NAF address keeps its own state",), Addr(number_first="7", street_name="QUANDONG", street_type="CLOSE", locality="CORREBY", state="ACT", postcode="2557").canon_key.split("|")[-1], "ACT"))
     assert_table(rows)
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------
+# the mutation run of the third review left guards in the tail and number readers that no table pinned; each table below holds the input the guard decides
+
+def parts(a: Addr):
+    return (a.number_first, a.street_name, a.street_type, a.locality, a.state, a.postcode)
+
+
+def test_class_postcode_ranges_are_sorted_four_digit_and_never_overlap():
+    """CLASS-TABLE: F12. The postcode ranges are looked up first match wins, so a range that grows into its neighbour changes nothing a lookup shows; the table itself must not overlap."""
+    from parcelkey.normalise import _STATE_BY_POSTCODE as ranges
+
+    rows = [(("range is ordered", lo, hi, state), lo <= hi <= 9999 and lo >= 0, True) for lo, hi, state in ranges]
+    rows += [(("starts after the one before ends", a, b), b[0] > a[1], True) for a, b in zip(ranges, ranges[1:])]
+    rows.append((("every state is a known code",), {s for _, _, s in ranges} <= {"NSW", "ACT", "VIC", "QLD", "SA", "WA", "TAS", "NT"}, True))
+    assert_table(rows)
+
+
+def test_class_a_letter_after_the_number_needs_a_street_behind_it_even_after_a_unit():
+    """CLASS-TABLE: F5. `18 A Smith St` is 18A, and so it is behind a unit written in front; with no street type behind it the A belongs to the street (`A Smith`), also behind a unit."""
+    rows = []
+    for front, street_text in itertools.product(["", "Unit 4 ", "Unit 4, ", "Apt 4 ", "Flat 4, ", "U4 "], ["Smith St", "Smith Rd", "Smith"]):
+        a = normalise_address(f"{front}18 A {street_text}")
+        two_words = " " in street_text
+        rows.append(((front, street_text), (a.number_first, a.street_name), ("18A", "SMITH") if two_words else ("18", f"A {street_text.upper()}")))
+    assert_table(rows)
+
+
+def test_class_a_suburb_in_the_columns_and_a_state_after_the_street_type_is_read_off_the_line():
+    """CLASS-TABLE: F6 to F8. The columns give the suburb only; the line ends with the street, a state, a postcode or both: they are read off the line, the street keeps its type and suffix."""
+    rows = []
+    for street, tail in itertools.product([("Smith St", "SMITH", "STREET"), ("Smith Rd", "SMITH", "ROAD"), ("Smith St North", "SMITH", "STREET NORTH"), ("Smith St South", "SMITH", "STREET SOUTH")],
+                                          [("NSW 2000", "NSW", "2000"), ("NSW", "NSW", ""), ("VIC", "VIC", ""), ("2000", "", "2000"), ("New South Wales 2000", "NSW", "2000")]):
+        a = normalise_address(f"12 {street[0]} {tail[0]}", "Correby")
+        rows.append(((street[0], tail[0]), parts(a), ("12", street[1], street[2], "CORREBY", tail[1], tail[2])))
+    assert_table(rows)
+
+
+def test_class_a_suburb_repeated_after_a_street_with_no_type_is_not_trusted():
+    """CLASS-TABLE: F6 to F8. The columns' suburb said again at the end of the line is taken off only when a street name and a type stand before it; behind a bare street name it stays in the line, and the state
+    and postcode stay unread, so the record is set aside by the matcher and is never linked on a guess."""
+    rows = []
+    for tail in ["", " NSW", " NSW 2000"]:
+        read = normalise_address(f"12 Smith St Correby{tail}", "Correby")
+        rows.append((("street and type before the suburb", tail), (read.street_name, read.street_type, read.locality, bool(read.state)), ("SMITH", "STREET", "CORREBY", bool(tail))))
+        for line in (f"12 Smith Correby{tail}", f"12 Correby{tail}"):
+            a = normalise_address(line, "Correby")
+            rows.append(((line,), (a.street_name, a.locality, a.state, a.postcode), (line[3:].upper(), "CORREBY", "", "")))
+    assert_table(rows)
+
+
+def test_class_a_comma_before_the_suburb_and_postcode_tells_where_the_street_ends_without_a_guess():
+    """CLASS-TABLE: F9, F10. A suburb after a comma, with a postcode or a state behind it, is read as written: the street/suburb split heuristic is only for a line with no comma."""
+    rows = []
+    for front, street, tail in itertools.product(["", "Unit 4, ", "4/"], ["12 Smith St", "12 Smith St North"], [("Fakeville 2000", "FAKEVILLE", "", "2000"), ("Park Orchards 3114", "PARK ORCHARDS", "", "3114"),
+                                                                                                                  ("Fakeville NSW", "FAKEVILLE", "NSW", ""), ("Elizabeth Grove SA 5112", "ELIZABETH GROVE", "SA", "5112")]):
+        a = normalise_address(f"{front}{street}, {tail[0]}")
+        rows.append(((front, street, tail[0]), ("SUBURB_SPLIT_HEURISTIC" in a.rules, a.locality, a.state, a.postcode), (False, tail[1], tail[2], tail[3])))
+        b = normalise_address(f"{front}{street} {tail[0]}")
+        rows.append((("without the comma", front, street, tail[0]), "SUBURB_SPLIT_HEURISTIC" in b.rules, True))
+    assert_table(rows)
+
+
+def test_class_the_postcode_written_before_the_state_between_commas_reads_the_same_as_state_first():
+    """CLASS-TABLE: F9. `Suburb, 2000, NSW` is `Suburb, NSW, 2000`: a state and a postcode that are comma chunks of their own are read in either order, with or without a suburb or a number in front."""
+    rows = []
+    for front, tail in itertools.product(["12 Smith St", "Smith St", "Unit 4, 12 Smith St", "12 Smith St, Fakeville", "Smith St, Fakeville"], [", NSW, 2000", ", 2000, NSW", ", NSW 2000",
+                                                                                                                                                ", 2000, New South Wales"]):
+        a = normalise_address(front + tail)
+        suburb = "FAKEVILLE" if "Fakeville" in front else ""
+        rows.append(((front, tail), (a.street_name, a.locality, a.state, a.postcode), ("SMITH", suburb, "NSW", "2000")))
+    assert_table(rows)

@@ -307,7 +307,10 @@ def _read_comma_tail(chunks: list[str], trial: list[str]) -> tuple[list[str], st
     while k > 1 and _is_state_postcode(chunks[k - 1]):
         k -= 1
     if k < len(chunks):
-        rest, tail_words = chunks[:k], " ".join(chunks[k:]).split()
+        tail_chunks = chunks[k:]
+        if len(tail_chunks) >= 2 and re.fullmatch(r"\d{3,5}", tail_chunks[-2]) and not any(ch.isdigit() for ch in tail_chunks[-1]):
+            tail_chunks[-2:] = tail_chunks[-1], tail_chunks[-2]          # the postcode written before the state (`Fakeville, 2000, NSW`) reads as `NSW 2000`
+        rest, tail_words = chunks[:k], " ".join(tail_chunks).split()
         if len(rest) >= 2 and _locality_like(rest[-1]):          # the chunk before may be the suburb alone (`Fakeville`) or with the state (`Fakeville NSW`)
             tail_words, rest = rest[-1].split() + tail_words, rest[:-1]
         locality, state, postcode = _split_tail(tail_words, trial)

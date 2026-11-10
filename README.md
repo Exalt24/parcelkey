@@ -6,7 +6,7 @@ Resolve messy property addresses into one master property id, with every decisio
 
 [![CI](https://github.com/Exalt24/parcelkey/actions/workflows/ci.yml/badge.svg)](https://github.com/Exalt24/parcelkey/actions/workflows/ci.yml)
 
-**On 4,904 made-up records parcelkey made 4,547 links and 4,529 were right: precision 99.60%, and recall 98.93% of the 4,578 records that should link, with no merge of two different units. Counting the 326 records its own policy sets aside as misses, honest recall is 92.35%.** The suite has 684 tests. The mutation check changed one guard at a time in 1,278 places (1,239 from the syntax tree of 13 modules, 39 named guards) and a test failed every time. That run was reduced: 15 Hypothesis examples per test instead of 60, and only the tests that cover the mutated module. Measured 2026-11-10, numbers and commands below.
+**On 4,904 made-up records parcelkey made 4,547 links and 4,529 were right: precision 99.60%, and recall 98.93% of the 4,578 records that should link, with no merge of two different units. Counting the 326 records its own policy sets aside as misses, honest recall is 92.35%.** The suite has 754 tests. The mutation check changed one guard at a time in 1,440 places (1,401 from the syntax tree of 13 modules, 39 named guards) and a test failed every time. That run was reduced: 15 Hypothesis examples per test instead of 60, and only the tests that cover the mutated module. Measured 2026-11-11, numbers and commands below.
 
 parcelkey takes address and contact records from three feeds (a CRM export, a listing feed, a sales history), matches each address to a row in a table in the public G-NAF layout on PostgreSQL with PostGIS, and gives every property one id that is stable for one G-NAF release file. It records the rule and the score behind every link, sets aside what it cannot decide with a reason, merges duplicate contacts only on a shared email or phone, and keeps each agency's rows apart with forced row level security. The caller names the agency, one database role serves all of them, and the master property list is shared. All data in this repository is made up.
 
@@ -52,19 +52,19 @@ flowchart LR
 
 ## Measured results
 
-All from my runs on 2026-11-10 (Windows 11, 16 logical cores, PostgreSQL 16 with PostGIS 3.4 in Docker on the same machine, other containers running, so the timings are rough). Full tables: [docs/results.md](docs/results.md). Raw output: [docs/measured-run.txt](docs/measured-run.txt).
+All from my runs on 2026-11-11 (Windows 11, 16 logical cores, PostgreSQL 16 with PostGIS 3.4 in Docker on the same machine, other containers running, so the timings are rough). Full tables: [docs/results.md](docs/results.md). Raw output: [docs/measured-run.txt](docs/measured-run.txt).
 
 | What | Result | How |
 |---|---|---|
 | Generated world | 4,230 addresses in the G-NAF layout (5 states, 37 localities, 226 streets) plus 92 new addresses made that are not in the file, 72 of which the feeds use; 4,904 source rows in two agencies (each 981 CRM, 662 listing, 809 sales) | `python scripts/seed.py --out out/seed --seed 7` |
-| G-NAF load | 9,135 rows in 0.68 s, flat reference of 4,230 addresses in 0.23 s | `python -m parcelkey load-gnaf out/seed/gnaf` |
+| G-NAF load | 9,135 rows in 0.74 s, flat reference of 4,230 addresses in 0.29 s | `python -m parcelkey load-gnaf out/seed/gnaf` |
 | Links | 4,547 made, 4,529 right: **precision 99.60%**. Of 4,578 records that should link, 4,529 did: **recall 98.93%**. Counting the 326 records the matcher's own policy sets aside as misses: **honest recall 92.35%** (4,529 of 4,904) | `python tools/measure.py --seed-dir out/seed` |
 | Set aside | 357 in quarantine: 324 where the answer key says that is right, 33 that could have linked | same |
 | Wrong links | 18, of which 16 are new addresses (not_in_gnaf) merged into a street one letter different | same |
 | Different units merged | 0 | same |
 | Contacts | 3,338 mentions became 2,226 contacts: pair precision 100.00%, pair recall 93.99%. The generator never makes two people share an email or phone, so the 100.00% holds by construction and shows no real world rate | same |
-| One agency, 2,452 records | ingest 1.5 s, normalise 1.6 s, match 6.2 s, contacts 5.4 s | same |
-| Ten times the data | precision 99.91%, recall 99.23%, honest recall 92.95%; one agency of 23,370 records matched in 78 s (the other in 89 s) | [docs/results.md](docs/results.md) |
+| One agency, 2,452 records | ingest 1.5 s, normalise 1.6 s, match 7.1 s, contacts 5.9 s | same |
+| Ten times the data | precision 99.91%, recall 99.23%, honest recall 92.95%; one agency of 23,370 records matched in 94 s (the other in 108 s) | [docs/results.md](docs/results.md) |
 
 Which defect classes were resolved, set aside or missed is in [docs/results.md](docs/results.md).
 
@@ -90,7 +90,7 @@ Also `quality`, `freshness --agency agency-a --max-age crm=168`, `quarantine --a
 
 ```
 python tools/pg.py up        # a missing database fails the tests, it never skips them
-python -m pytest             # 684 tests, about two and a half minutes
+python -m pytest             # 754 tests, about three minutes
 python tests/mutation_check.py --module normalise     # one module at a time; --guards runs the named guards; --summary totals them
 ```
 
