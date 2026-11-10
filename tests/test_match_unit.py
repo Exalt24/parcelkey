@@ -349,3 +349,81 @@ def test_the_suffix_rule_reaches_the_transposition_locality_and_lot_checks():
     lot = A(number="", lot="7", typ="ROAD NORTH")
     assert decide(lot, None, None, [C("P", A(number="", lot="7", typ="ROAD"))], CFG).rule == "EXACT_LOT"
     assert decide(lot, None, None, [C("P", A(number="", lot="7", typ="ROAD SOUTH"))], CFG).outcome == "new"
+
+
+# ---- the fifth review (final blind recall of corpus-round-4): a record with no suburb, and a level against the building's own address -----------------------------------------------
+
+import itertools
+
+
+def assert_table(rows):
+    """rows are (label, got, want); every mismatch is listed at once."""
+    bad = [r for r in rows if r[1] != r[2]]
+    assert not bad, f"{len(bad)} of {len(rows)} rows differ, first: {bad[:5]}"
+
+
+def test_class_a_record_with_no_suburb_that_links_to_nothing_is_set_aside_and_never_a_derived_property():
+    """CLASS-TABLE: F3 (round 5). `12 Smith St` with no suburb makes one derived id for the street in every suburb and every postcode, so it is NO_LOCALITY: set aside, in the numbered path and the lot
+    path alike. The same record with a suburb is a new property as before, and a no-suburb record that has a candidate still links to it (or is a tie when the street is in two suburbs)."""
+    rows = []
+    for number, street, postcode, state in itertools.product(["12", "7A", "100"], ["SMITH", "ST KILDA"], ["2000", "2750", ""], ["NSW", ""]):
+        rec = A(number=number, street=street, locality="", state=state, postcode=postcode)
+        d = decide(rec, None, None, [], CFG)
+        rows.append((("no suburb, nothing near", number, street, postcode, state), (d.outcome, d.rule, d.reason, d.pid), ("quarantine", "NO_LOCALITY", "NO_LOCALITY", "")))
+        with_suburb = decide(A(number=number, street=street, locality="FAKEVILLE", state=state, postcode=postcode), None, None, [], CFG)
+        rows.append((("a suburb makes the property", number, street, postcode, state), (with_suburb.outcome, with_suburb.rule), ("new", "NEW_DERIVED")))
+        far = decide(rec, None, None, [C("PFAR", A(number="999", street=street))], CFG)
+        rows.append((("a candidate for another number is nothing near", number, street), (far.outcome, far.reason), ("quarantine", "NO_LOCALITY")))
+        one = decide(rec, None, None, [C("P1", A(number=number, street=street, locality="PENRITH", postcode="2750"))], CFG)
+        rows.append((("one candidate: linked to it", number, street), (one.outcome, one.rule, one.pid), ("link", "EXACT_KEY", "P1")))
+        two = decide(rec, None, None, [C("P1", A(number=number, street=street, locality="PENRITH", postcode="2750")), C("P2", A(number=number, street=street, locality="SYDNEY"))], CFG)
+        rows.append((("the street in two suburbs: a tie", number, street), (two.outcome, two.reason), ("quarantine", "AMBIGUOUS_TIE")))
+    lot_no_suburb = decide(lot_rec(locality=""), None, None, [], CFG)
+    rows.append((("lot, no suburb", ), (lot_no_suburb.outcome, lot_no_suburb.reason), ("quarantine", "NO_LOCALITY")))
+    lot_suburb = decide(lot_rec(), None, None, [], CFG)
+    rows.append((("lot, with a suburb", ), (lot_suburb.outcome, lot_suburb.rule), ("new", "NEW_DERIVED")))
+    lot_link = decide(lot_rec(locality=""), None, None, [C("PL", A(number="", lot="7", typ="ROAD"))], CFG)
+    rows.append((("lot, no suburb, a lot only candidate", ), (lot_link.outcome, lot_link.rule, lot_link.pid), ("link", "EXACT_LOT", "PL")))
+    assert_table(rows)
+    assert decide(A(locality=""), None, None, [], CFG).detail["why"].startswith("no suburb")
+
+
+def test_class_a_level_on_the_record_takes_the_floor_and_a_record_with_no_level_is_the_building():
+    """CLASS-TABLE: F7 (round 5). The building has its own address and so does each floor. `Level 3, 100 Collins St` links to the floor, not a tie with the building; `100 Collins St` links to the building and
+    never to a floor, and when G-NAF holds only floors it is set aside and links to none of them."""
+    rows = []
+    levels = ["3", "5", "G", "10", "2A"]
+    building = C("BLDG", A(number="100", street="COLLINS"))
+    floors = {lv: C(f"F{lv}", A(number="100", street="COLLINS", level=lv)) for lv in levels}
+    for lv in levels:
+        d = decide(A(number="100", street="COLLINS", level=lv), None, None, [building, *floors.values()], CFG)
+        rows.append((("level picks the floor", lv), (d.outcome, d.rule, d.pid), ("link", "EXACT_KEY", f"F{lv}")))
+        only_building = decide(A(number="100", street="COLLINS", level=lv), None, None, [building], CFG)
+        rows.append((("a level with only the building", lv), (only_building.outcome, only_building.pid), ("link", "BLDG")))
+        other = [floors[x] for x in levels if x != lv]
+        no_floor = decide(A(number="100", street="COLLINS", level=lv), None, None, [building, *other], CFG)
+        rows.append((("a level that is not there is the building", lv), (no_floor.outcome, no_floor.pid), ("link", "BLDG")))
+        only_floor = decide(A(number="100", street="COLLINS", level=lv), None, None, [floors[lv]], CFG)
+        rows.append((("the floor alone", lv), (only_floor.outcome, only_floor.pid), ("link", f"F{lv}")))
+        near = decide(A(number="100", street="COLLINX", level=lv), None, None, [C("NB", A(number="100", street="COLLINS"), sim=0.8), C("NF", A(number="100", street="COLLINS", level=lv), sim=0.8)], CFG)
+        rows.append((("a near miss street takes the floor too", lv), (near.outcome, near.rule, near.pid), ("link", "TRIGRAM", "NF")))
+        # the record has no level
+        bare = decide(A(number="100", street="COLLINS"), None, None, [building, *floors.values()], CFG)
+        rows.append((("no level is the building", lv), (bare.outcome, bare.rule, bare.pid), ("link", "EXACT_KEY", "BLDG")))
+        only_floors = decide(A(number="100", street="COLLINS"), None, None, [floors[lv]], CFG)
+        rows.append((("no level never links to the only floor", lv), (only_floors.outcome, only_floors.rule, only_floors.pid), ("quarantine", "UNIT_CONFLICT", "")))
+        rows.append((("the detail names the level", lv), only_floors.detail, {"record_unit": "", "candidate_units": [""], "candidate_levels": [lv]}))
+        near_floor = decide(A(number="100", street="COLLINX"), None, None, [C("NF", A(number="100", street="COLLINS", level=lv), sim=0.8)], CFG)
+        rows.append((("no level never links to a floor on a near miss", lv), (near_floor.outcome, near_floor.reason), ("quarantine", "UNIT_CONFLICT")))
+    two_floors = decide(A(number="100", street="COLLINS"), None, None, [floors["3"], floors["5"]], CFG)
+    rows.append((("no level, two floors", ), (two_floors.outcome, two_floors.reason, two_floors.detail["candidate_levels"]), ("quarantine", "UNIT_CONFLICT", ["3", "5"])))
+    # the ordinary inputs: a unit with a level keeps working, a unit with no level on the record still links to the flat on a floor, and the plain building still links to itself
+    flat = C("FLAT5", A(number="100", street="COLLINS", unit="5", level="3"))
+    plain_flat = C("PLAIN5", A(number="100", street="COLLINS", unit="5"))
+    for rec, cands, want in [(A(number="100", street="COLLINS", unit="5"), [flat], ("link", "FLAT5")), (A(number="100", street="COLLINS", unit="5", level="3"), [flat], ("link", "FLAT5")),
+                             (A(number="100", street="COLLINS", unit="5", level="3"), [plain_flat, flat], ("link", "FLAT5")), (A(number="100", street="COLLINS", unit="5", level="3"), [plain_flat], ("link", "PLAIN5")),
+                             (A(number="100", street="COLLINS", unit="5"), [plain_flat, flat], ("quarantine", "AMBIGUOUS_TIE")), (A(number="100", street="COLLINS", unit="5", level="4"), [flat], ("quarantine", "UNIT_CONFLICT")),
+                             (A(number="100", street="COLLINS"), [building], ("link", "BLDG")), (A(number="100", street="COLLINS", unit="6"), [flat, plain_flat], ("quarantine", "UNIT_CONFLICT"))]:
+        d = decide(rec, None, None, cands, CFG)
+        rows.append((("ordinary", rec.unit, rec.level, [c.pid for c in cands]), (d.outcome, d.pid or d.reason), want))
+    assert_table(rows)

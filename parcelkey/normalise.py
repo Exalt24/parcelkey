@@ -76,11 +76,16 @@ _GROUND_FLOOR = re.compile(r"\bGROUND (?:FLOOR|LEVEL|FLR|LVL)\b")
 _ORDINAL_FLOOR = re.compile(r"\b(\d+)(?:ST|ND|RD|TH) (?:FLOOR|LEVEL|FLR|LVL)\b")
 _POSTAL = re.compile(r"(?:^|[\s,])(?:(?:G\s*)?P\s*O\s*BOX|LOCKED\s+BAG|PRIVATE\s+BAG)\b")
 _GLUED = re.compile("^(" + "|".join(re.escape(m) for m in sorted(UNIT_MARKERS, key=len, reverse=True)) + r")(\d+[A-Z]?)(?:/(.+))?$")          # no-mutate: alternation backtracks, so the order of the markers only changes speed
+# a state written with dots (N.S.W., A.C.T., Q.L.D., W.A.): the dots come out before the state is read, so `St` after them is not a street and the suburb is not eaten by the state
+_DOTTED_STATE = re.compile(r"(?<![A-Z0-9])(?:" + "|".join(r"\.\s?".join(code) for code in STATES if len(code) > 1) + r")\.?(?![A-Z])")
 _DISALLOWED = re.compile(r"[^A-Z0-9/,\- #]")
 _POSTCODE = re.compile(r"^\d{4}$")
 _SPACED_SLASH = re.compile(r"(?<=[A-Z0-9])\s+/\s*(?=\d)|(?<=[A-Z0-9])\s*/\s+(?=\d)")          # `4 / 18`, `4 /18` and `4/ 18` are the unit slash
 _DASH_LETTER = re.compile(r"^(\d+)-([A-Z])$")                    # 4-A is number 4A
 _NOT_A_LOCALITY_START = UNIT_MARKERS | LEVEL_MARKERS | {"LOT"}
+# the addresses a form is filled with when the person gave none: they are not evidence that two records are one person
+PLACEHOLDER_EMAILS = frozenset({"noemail@noemail.com", "noemail@email.com", "noemail@gmail.com", "nomail@nomail.com", "no@email.com", "none@none.com", "no@no.com", "na@na.com", "n@n.com",
+                                "a@a.com", "test@test.com", "email@email.com", "unknown@unknown.com"})
 # every character RFC 5322 allows in an unquoted local part (the apostrophe of O'Brien among them); the domain stays letters, digits and hyphens
 _EMAIL = re.compile(r"^[a-z0-9._%+\-!#$&'*/=?^`{|}~]+@[a-z0-9\-]+(?:\.[a-z0-9\-]+)+$")
 _EMAIL_NAMED = re.compile(r"^([^<>]*)<([^<>]*)>$")                   # Kate Smith <kate@example.com>
@@ -91,6 +96,10 @@ _UNIT_WORD_ALT = "|".join(sorted((w for w in _UNIT_WORDS if w != "#"), key=len, 
 _UNIT_DOTTED = re.compile(rf"((?<![A-Za-z0-9])(?:{_UNIT_WORD_ALT})\s*|#\s*)(\d{{1,4}})(?:\.(\d{{1,4}})|-(0\d{{1,3}}))(?![\d.\-])", re.IGNORECASE)
 _DOTTED_SLASH = re.compile(r"(?<![A-Za-z0-9.])(\d{1,4})\.(\d{1,4})(?=/\d)")
 _UNIT_NO_WORD = re.compile(rf"(?<![A-Z0-9])({_UNIT_WORD_ALT})\s+(?:NO|NUMBER|NUM|NR)\s+(?=[A-Z]{{0,2}}\d)")          # Unit No. 5, Apartment Number 5: the word is a label, the number is the unit
+# a street number range written with spaces (12 - 14), another dash (an en or em dash, the minus sign), an ampersand or the word to is the range 12-14. Not after a unit, level or lot word, where it is a unit or a level
+_RANGE = re.compile(r"(?<![A-Za-z0-9.#])(\d+[A-Za-z]?)(?:\s*[-\u2010-\u2015\u2212&]\s*|\s+TO\s+)(\d+[A-Za-z]?)(?![A-Za-z0-9/])(?!\.\d)", re.IGNORECASE)
+_RANGE_BLOCKERS = (_UNIT_WORDS | LEVEL_MARKERS | frozenset(OTHER_LEVEL_WORDS) | {"LOT", "NO", "NUMBER", "NUM", "NR", "SPACE", "#"})
+_PLAN = re.compile(r"(?<![A-Z0-9])(LOT\s+\d+[A-Z]?)(?:[\s,]+ON(?![A-Z0-9]))?(?:[\s,/]*(?:DP|SP|LP|RP|CP|PS)\s*\d+[A-Z]?(?![A-Z0-9]))?")          # Lot 5 DP 12345, Lot 12 on Smith Rd: the lot, and the plan or the word on dropped
 _CAR_WORD = re.compile(r"(?<![A-Z0-9])CAR[ \-](SPACE|PARK)(?= +(?:[A-Z]{0,2}\d|[A-Z]\b))")          # Car Space 12 and Car Park 3 are Carspace and Carpark
 
 
@@ -202,12 +211,18 @@ def _flat(marker: str, ident: str, rules: list[str]) -> str:
     return cleaned
 
 
+def _level_slash(token: str) -> re.Match | None:
+    """`2/45` or `G/12` straight after a level word (`Level 2/45 Pitt St`): the part before the slash is the level, not a unit. Anything else before the slash (`Level B2/12`) is not read as a level."""
+    found = _SLASH.match(token)
+    return found if found and (_ID.match(found.group(1)) or found.group(1) == "G") else None
+
+
 def _takes_id(marker: str, nxt: str) -> bool:
     """True when `marker` is a unit, level or lot word that the next token completes."""
     if marker in _PLAIN_UNIT_WORDS:          # Building 2 and Tower 3 are decided by `_numbered_word_unit`, which needs the words behind them
         return bool(_UID.match(nxt) or _SLASH.match(nxt))
     if marker in LEVEL_MARKERS:
-        return bool(_ID.match(nxt) or nxt in ("G", "GROUND"))
+        return bool(_ID.match(nxt) or nxt in ("G", "GROUND") or _level_slash(nxt))
     return (marker == "LOT" or marker in OTHER_LEVEL_WORDS) and bool(_ID.match(nxt))
 
 
@@ -292,11 +307,26 @@ def _name_words(words: list[str], rules: list[str], *, saint_everywhere: bool) -
     return " ".join(out)
 
 
+def _join_ranges(raw: str) -> str:
+    """Write a street number range as `12-14`: `12 - 14`, `12 - 14` with an en or em dash, `12 & 14` and `12 to 14`. A pair of numbers right after a unit, level or lot word is not a range of house numbers and is left as written."""
+    def one(m: re.Match) -> str:
+        word = re.search(r"([A-Za-z#]+)\s*$", raw[:m.start()])
+        before = word.group(1).upper() if word else ""
+        if before in _RANGE_BLOCKERS or before[:-1] in _RANGE_BLOCKERS:
+            return m.group(0)
+        return f"{m.group(1)}-{m.group(2)}"
+    return _RANGE.sub(one, raw)
+
+
 def _prep(text: str, rules: list[str]) -> str:
     folded = unicodedata.normalize("NFKC", text)
     if folded != folded.upper():
         _add(rules, "CASE_FOLDED")
     t = folded.upper().replace("'", "").replace("’", "")
+    undotted = _DOTTED_STATE.sub(lambda m: re.sub(r"[^A-Z]", "", m.group(0)) + (" " if m.string[m.end():m.end() + 1].isdigit() else ""), t)
+    if undotted != t:
+        _add(rules, "STATE_DOTS_REMOVED")
+        t = undotted
     t = t.replace(";", ",").replace(":", ",")
     cleaned = _DISALLOWED.sub(" ", t)
     if cleaned != t:
@@ -428,11 +458,16 @@ def normalise_address(line: str | None, suburb: str | None = None, state: str | 
     if joined != raw:
         _add(rules, "UNIT_NUMBER_JOINED")
         raw = joined
+    ranged = _join_ranges(raw)
+    if ranged != raw:
+        _add(rules, "NUMBER_RANGE_READ")
+        raw = ranged
     text = _prep(raw, rules)
     if _POSTAL.search(text):
         _add(rules, "POSTAL_ADDRESS")
         return Addr(rules=tuple(rules))
-    for pattern, replacement, rule in ((_SPACED_SLASH, "/", "UNIT_SLASH_SPACED"), (_UNIT_NO_WORD, r"\1 ", "UNIT_NO_WORD_DROPPED"), (_CAR_WORD, r"CAR\1", "CAR_WORD_JOINED")):
+    for pattern, replacement, rule in ((_SPACED_SLASH, "/", "UNIT_SLASH_SPACED"), (_UNIT_NO_WORD, r"\1 ", "UNIT_NO_WORD_DROPPED"), (_CAR_WORD, r"CAR\1", "CAR_WORD_JOINED"),
+                                       (_PLAN, r"\1", "LOT_PLAN_DROPPED")):
         changed = pattern.sub(replacement, text)
         if changed != text:
             _add(rules, rule)
@@ -516,6 +551,14 @@ def normalise_address(line: str | None, suburb: str | None = None, state: str | 
                 _add(rules, "UNIT_MARKER_WORD")
                 i += 2
                 continue
+        level_slash = _level_slash(nxt) if t in LEVEL_MARKERS and not level else None
+        if level_slash:
+            level = _ident(level_slash.group(1), rules)
+            first, last_n = level_slash.group(2), level_slash.group(3) or ""
+            for r in ("LEVEL_MARKER", "LEVEL_PREFIX_FORM", "UNIT_SLASH_FORM"):
+                _add(rules, r)
+            i += 2
+            break
         if t in LEVEL_MARKERS and not level and nxt and (_ID.match(nxt) or nxt in ("G", "GROUND")):
             level = "G" if nxt in ("G", "GROUND") else _ident(nxt, rules)
             _add(rules, "LEVEL_MARKER")
@@ -582,9 +625,9 @@ def normalise_address(line: str | None, suburb: str | None = None, state: str | 
                 street_w = w2
         elif repeats and common_street_type(w2[-n - 1]):
             street_w, loc2 = w2[:-n], list(locality_words)          # the columns give the suburb and the line ends with it straight after a street type: said twice
-        elif comma_state and not locality_words and not _take_suffix(list(w2))[1]:
+        elif not locality_words and not _take_suffix(list(w2))[1]:
             split_w, split_loc = _suburb_split(w2)
-            if split_loc:
+            if split_loc and (comma_state or _locality_like(" ".join(split_loc))):          # with no state or postcode behind it the words must also look like a suburb: no digit, no unit word first, no street type last
                 street_w, loc2, heuristic = split_w, split_loc, True
         if street_w is not None and _tail_agrees(st, pc, locality_words, st2, pc2, loc2):
             filled = (not st and bool(st2)) or (not pc and bool(pc2)) or (not locality_words and bool(loc2))
@@ -708,8 +751,10 @@ def normalise_phone(raw: str | None) -> tuple[str, tuple[str, ...]]:
         digits = digits[1:]
         _add(rules, "PHONE_TRUNK_ZERO_STRIPPED")
     if re.fullmatch(r"4\d{8}|[2378]\d{8}", digits):
-        _add(rules, "PHONE_E164")
-        return "+61" + digits, tuple(rules)
+        if len(set(digits[1:])) > 1:
+            _add(rules, "PHONE_E164")
+            return "+61" + digits, tuple(rules)
+        _add(rules, "PHONE_PLACEHOLDER")          # 0400 000 000, 0411 111 111: one digit eight times is a form filled with a placeholder, not one person's number
     _add(rules, "PHONE_INVALID")
     return "", tuple(rules)
 
@@ -739,7 +784,9 @@ def normalise_email(raw: str | None) -> tuple[str, tuple[str, ...]]:
     lowered = text.lower()
     if lowered != text:
         _add(rules, "EMAIL_LOWERCASED")
-    if not _EMAIL.match(lowered):
+    if lowered in PLACEHOLDER_EMAILS:
+        _add(rules, "EMAIL_PLACEHOLDER")
+    if lowered in PLACEHOLDER_EMAILS or not _EMAIL.match(lowered):
         _add(rules, "EMAIL_INVALID")
         return "", tuple(rules)
     return lowered, tuple(rules)

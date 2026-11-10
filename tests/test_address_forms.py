@@ -138,7 +138,7 @@ def shapes(street: str, suburb: str) -> dict[str, tuple[str, set[str]]]:
         "street, state postcode": (f"{street}, {STATE} {POSTCODE}", {"st", "pc"}),
         "street, state": (f"{street}, {STATE}", {"st"}),
         "street, postcode": (f"{street}, {POSTCODE}", {"pc"}),
-        "street suburb": (f"{street} {suburb}", {"loc"}),          # no state or postcode to show the end: only a column can say the last word is a suburb
+        "street suburb": (f"{street} {suburb}", {"loc"}),          # no state or postcode behind it: the first street type word ends the street
     }
 
 
@@ -153,8 +153,6 @@ def test_class_address_split_across_the_columns():
                                                                                                                            (True, False)):
         given = {k for k, blank in (("loc", blank_loc), ("st", blank_st), ("pc", blank_pc)) if not blank}
         for shape, (tail, carries) in shapes(street, suburb).items():
-            if shape == "street suburb" and blank_loc:
-                continue          # nothing marks the last word of a bare line as a suburb, so it stays with the street (the README says no suburb is guessed)
             got = normalise_address(f"{front}{tail}", "" if blank_loc else suburb, "" if blank_st else STATE, "" if blank_pc else POSTCODE)
             have = given | carries
             want = Addr(unit=unit, number_first=number, street_name=street_name, street_type="STREET", locality=locality if "loc" in have else "", state=STATE if "st" in have else "",
@@ -630,4 +628,240 @@ def test_class_a_dotted_unit_links_to_the_flat_g_naf_holds_without_the_dot():
     for text, unit in [("Unit 3.02, 100 Smith St", "302"), ("Apt 12-05, 100 Smith St", "1205"), ("Suite 1.05, 100 Smith St", "105"), ("3.02/100 Smith St", "302"), ("Unit 3.03, 100 Smith St", "")]:
         d = decide(normalise_address(text, *FAKE), None, None, reference)
         rows.append((("dotted flat", text), (d.outcome, d.pid) if unit else (d.outcome, d.rule), ("link", f"100:{unit}") if unit else ("quarantine", "UNIT_CONFLICT")))
+    assert_table(rows)
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------
+# the fifth review (final blind recall of corpus-round-4, findings F1, F2, F5, F6, F8): a level word before a slash, a number range with spaces, a dotted state, a suburb with no state behind it, a lot with a plan
+
+LEVEL_SLASH_WORDS = ["Level", "LEVEL", "level", "Lvl", "Floor", "Flr", "L"]
+LEVEL_SLASH_IDS = [("2", "2"), ("02", "2"), ("12", "12"), ("2A", "2A"), ("G", "G")]
+LEVEL_SLASH_STREETS = [("Pitt St", "PITT STREET"), ("St Kilda Road", "SAINT KILDA ROAD")]
+
+
+def test_class_a_level_word_before_a_slash_is_the_level_not_a_unit():
+    """CLASS-TABLE: F1 (round 5). `Level 2/45 Pitt St`, `Lvl 2/45`, `Floor 2/45`, `Ground Floor/45` and `Level G/12` are level 2, 2, 2, G and G of the number after the slash, the same address as the
+    comma form `Level 2, 45 Pitt St` and as `L2/45`; the unit stays empty and `LEVEL` is never a building name."""
+    rows = []
+    for word, (ident, clean), sep, number, (street_text, street_key) in itertools.product(LEVEL_SLASH_WORDS, LEVEL_SLASH_IDS, ["/", " / "], ["45", "45-47", "45A"], LEVEL_SLASH_STREETS):
+        a = normalise_address(f"{word} {ident}{sep}{number} {street_text}", *FAKE)
+        label = (word, ident, sep, number, street_text)
+        rows.append((label, (a.unit, a.level, a.building, a.number_key, a.street_key), ("", clean, "", number, street_key)))
+        rows.append((("rule", *label), ("LEVEL_PREFIX_FORM" in a.rules, "LEVEL_MARKER" in a.rules, "UNIT_SLASH_FORM" in a.rules), (True, True, True)))
+        rows.append((("same as the comma form", *label), a.canon_key, normalise_address(f"{word} {ident}, {number} {street_text}", *FAKE).canon_key))
+        if ident != "G":
+            rows.append((("same as L2/45", *label), a.canon_key, normalise_address(f"L{ident}/{number} {street_text}", *FAKE).canon_key))
+    for text, level, number in [("Ground Floor/45 Pitt St", "G", "45"), ("Ground Level/45 Pitt St", "G", "45"), ("3rd Floor/45 Pitt St", "3", "45"), ("1st Floor / 45 Pitt St", "1", "45"), ("Level 2/45 Pitt St, Sydney NSW 2000", "2", "45")]:
+        a = normalise_address(text, *FAKE)
+        rows.append((("floor words", text), (a.unit, a.level, a.building, a.number_key), ("", level, "", number)))
+    # a level word with no digits yet, and a slash form that is not a level: a word between a unit and the slash, a level written twice, an id with a letter before its digits
+    for text in ["Level Ground, 45 Pitt St", "Level Ground 45 Pitt St", "Ground Level, 45 Pitt St"]:
+        a = normalise_address(text, *FAKE)
+        rows.append((("level ground", text), (a.unit, a.level, a.number_key), ("", "G", "45")))
+    for text in ["Unit 5 Foo 2/45 Pitt St", "Unit 5, Skyline 2/45 Pitt St", "Level B2/45 Pitt St", "Floor AB2/45 Pitt St", "Level 3 Level 2/45 Pitt St"]:
+        a = normalise_address(text, *FAKE)
+        rows.append((("not read as a level before a slash", text), (a.level in ("", "3"), a.level == "2", "LEVEL_PREFIX_FORM" in a.rules), (True, False, False)))
+    # the ordinary inputs: a unit with a slash, a level with a comma, a level and a unit, a unit word before the slash, a unit that is a letter and a digit
+    for text, unit, level, building, number in [("3/45 Pitt St", "3", "", "", "45"), ("Unit 3/45 Pitt St", "3", "", "", "45"), ("Level 2, 45 Pitt St", "", "2", "", "45"), ("L3/45 Pitt St", "", "3", "", "45"),
+                                                ("Level 2, 5/45 Pitt St", "5", "2", "", "45"), ("Level 2 Suite 7, 45 Pitt St", "7", "2", "", "45"), ("Suite 2/45 Pitt St", "2", "", "", "45"),
+                                                ("Shop 2/45 Pitt St", "2", "", "", "45"), ("G1/45 Pitt St", "G1", "", "", "45"), ("Skyline Tower, Level 2, 45 Pitt St", "", "2", "SKYLINE TOWER", "45"),
+                                                ("Level 2 45 Pitt St", "", "2", "", "45")]:
+        a = normalise_address(text, *FAKE)
+        rows.append((("ordinary", text), (a.unit, a.level, a.building, a.number_key), (unit, level, building, number)))
+    assert_table(rows)
+
+
+def test_class_a_floor_written_with_a_slash_links_to_the_floor_never_to_the_flat_of_that_number():
+    """CLASS-TABLE: F1 (round 5). With floor 2, flat 2 and the building itself at number 45, `Level 2/45` in every spelling links to the floor, and to nothing else."""
+    rows = []
+    street = dict(street_name="PITT", street_type="STREET", locality="FAKEVILLE", state="NSW", postcode="2000")
+    reference = [Candidate("BLDG", Addr(number_first="45", **street), 1.0, True, None), Candidate("FLOOR2", Addr(level="2", number_first="45", **street), 1.0, True, None),
+                 Candidate("FLAT2", Addr(unit="2", number_first="45", **street), 1.0, True, None)]
+    for word, sep in itertools.product(LEVEL_SLASH_WORDS, ["/", " / ", ", "]):
+        text = f"{word} 2{sep}45 Pitt St"
+        d = decide(normalise_address(text, *FAKE), None, None, reference)
+        rows.append((("floor", text), (d.outcome, d.rule, d.pid), ("link", "EXACT_KEY", "FLOOR2")))
+        other = decide(normalise_address(f"{word} 9{sep}45 Pitt St", *FAKE), None, None, reference)
+        rows.append((("a floor that is not there is the building", text), (other.outcome, other.pid), ("link", "BLDG")))
+    for text, pid in [("2/45 Pitt St", "FLAT2"), ("Unit 2, 45 Pitt St", "FLAT2"), ("45 Pitt St", "BLDG")]:
+        d = decide(normalise_address(text, *FAKE), None, None, reference)
+        rows.append((("ordinary", text), (d.outcome, d.rule, d.pid), ("link", "EXACT_KEY", pid)))
+    assert_table(rows)
+
+
+RANGE_SEPARATORS = ["-", " - ", " -", "- ", " \u2013 ", "\u2013", " \u2014 ", "\u2014", " \u2212 ", " & ", "&", " to ", " TO ", " To "]
+RANGE_NUMBERS = [("12", "14"), ("2", "4"), ("101", "103"), ("12A", "14B")]
+RANGE_FRONTS = ["", "Unit 5, ", "Unit 5 ", "5/", "5 / ", "Level 2, "]
+RANGE_TAILS = ["", ", Fakeville NSW 2000"]
+
+
+def test_class_a_street_number_range_with_spaces_another_dash_or_a_word_is_one_range():
+    """CLASS-TABLE: F2 (round 5). `12 - 14 Smith St`, an en or em dash, `12 & 14` and `12 to 14` are the range 12-14, the same address as `12-14 Smith St`: number first and last, street SMITH STREET,
+    never number 12 on a street called `14 SMITH`."""
+    rows = []
+    for front, (first, last), sep, (street_text, street_key), tail in itertools.product(RANGE_FRONTS, RANGE_NUMBERS, RANGE_SEPARATORS, [("Smith St", "SMITH STREET"), ("St Kilda Road", "SAINT KILDA ROAD")], RANGE_TAILS):
+        text = f"{front}{first}{sep}{last} {street_text}{tail}"
+        tight = normalise_address(f"{front}{first}-{last} {street_text}{tail}", *FAKE)
+        a = normalise_address(text, *FAKE)
+        rows.append((("parts", text), (a.number_first, a.number_last, a.street_key), (first, last, street_key)))
+        rows.append((("same as the tight form", text), (a, a.canon_key), (tight, tight.canon_key)))
+        rows.append((("rule", text), "NUMBER_RANGE_READ" in a.rules, sep != "-"))
+        rows.append((("no digit in the street name", text), a.street_name[:1].isdigit(), False))
+    # the ordinary inputs: a pair of numbers after a unit, level or lot word is not a range of house numbers, and a plain range or a single number is read as before
+    for text in ["Unit 3 & 4, 12 Smith St", "Unit 3 - 4, 12 Smith St", "Units 1 & 2, 12 Smith St", "Level 1 - 2, 12 Smith St", "Shop 1 to 2, 12 Smith St", "Suite 3 & 4, 12 Smith St", "Lot 5 - 7, 12 Smith St",
+                 "Flat No 3 & 4, 12 Smith St", "# 3 - 4, 12 Smith St", "Tower 3 - 4, 12 Smith St"]:
+        a = normalise_address(text, *FAKE)
+        rows.append((("not a range", text), "NUMBER_RANGE_READ" in a.rules, False))
+    for text, number in [("12-14 Smith St", "12-14"), ("12 Smith St", "12"), ("Unit 5, 12 Smith St", "12"), ("5/12-14 Smith St", "12-14"), ("12 Smith St - Fakeville", "12")]:
+        a = normalise_address(text, *FAKE)
+        rows.append((("ordinary", text), ("NUMBER_RANGE_READ" in a.rules, a.number_key), (False, number)))
+    assert len(rows) > 1000
+    assert_table(rows)
+
+
+def test_class_a_number_range_with_spaces_links_to_the_range_address_and_never_to_a_house_beside_it():
+    """CLASS-TABLE: F2 (round 5). G-NAF holds `12-14 Smith St` and a house at 16; the record written with spaces, an en dash, an ampersand or `to` links to the range address."""
+    rows = []
+    street = dict(street_name="SMITH", street_type="STREET", locality="FAKEVILLE", state="NSW", postcode="2000")
+    reference = [Candidate("RANGE", Addr(number_first="12", number_last="14", **street), 1.0, True, None), Candidate("H16", Addr(number_first="16", **street), 1.0, True, None),
+                 Candidate("H14", Addr(number_first="14", **street), 1.0, True, None)]
+    for sep in RANGE_SEPARATORS:
+        d = decide(normalise_address(f"12{sep}14 Smith St", *FAKE), None, None, reference)
+        rows.append((("range", sep), (d.outcome, d.rule, d.pid), ("link", "EXACT_KEY", "RANGE")))
+    for text, pid in [("16 Smith St", "H16"), ("14 Smith St", "H14")]:
+        d = decide(normalise_address(text, *FAKE), None, None, reference)
+        rows.append((("ordinary", text), (d.outcome, d.rule, d.pid), ("link", "EXACT_KEY", pid)))
+    assert_table(rows)
+
+
+DOTTED_STATES = {"NSW": ["N.S.W.", "N.S.W", "N. S. W.", "n.s.w.", "N.S.W. "], "VIC": ["V.I.C.", "V.I.C", "V. I. C."], "QLD": ["Q.L.D.", "Q.L.D", "Q. L. D."], "SA": ["S.A.", "S.A", "S. A."],
+                 "WA": ["W.A.", "W.A", "W. A."], "TAS": ["T.A.S.", "T.A.S", "T. A. S."], "NT": ["N.T.", "N.T", "N. T."], "ACT": ["A.C.T.", "A.C.T", "A. C. T."], "OT": ["O.T.", "O.T"]}
+STATE_LAYOUTS = ["{s}, Fakeville {st} 2000", "{s}, Fakeville, {st} 2000", "{s}, Fakeville, {st}, 2000", "{s} Fakeville {st} 2000", "{s}, Fakeville {st}"]
+
+
+def test_class_a_state_written_with_dots_is_the_state():
+    """CLASS-TABLE: F5 (round 5). `N.S.W.`, `A.C.T.`, `Q.L.D.`, `W.A.` and the rest, with or without the last dot or with spaces, are the state: the street keeps its type (`St` is never SAINT), the suburb is
+    the suburb, and the result is the plain-state address. The same holds for a state column."""
+    rows = []
+    for code, forms in DOTTED_STATES.items():
+        for form, (street_text, street_key), layout in itertools.product(forms, [("Smith St", "SMITH STREET"), ("St Kilda Rd", "SAINT KILDA ROAD")], STATE_LAYOUTS):
+            text = layout.format(s=f"12 {street_text}", st=form)
+            plain = normalise_address(layout.format(s=f"12 {street_text}", st=code))
+            a = normalise_address(text)
+            rows.append((("parts", text), (a.street_key, a.locality, a.state, a.postcode), (street_key, "FAKEVILLE", code, plain.postcode)))
+            rows.append((("same as the plain state", text), a, plain))
+            rows.append((("rule", text), "STATE_DOTS_REMOVED" in a.rules, True))
+            rows.append((("plain state fires nothing", text), "STATE_DOTS_REMOVED" in plain.rules, False))
+        for form in forms:
+            col = normalise_address("12 Smith St", "Fakeville", form, "2000")
+            rows.append((("state column", code, form), (col.state, col.locality, col.postcode, col.street_key), (code, "FAKEVILLE", "2000", "SMITH STREET")))
+    # glued to the postcode, and a state in a street or a suburb name is left alone
+    for text, state, postcode in [("12 Smith St, Fakeville, N.S.W.2000", "NSW", "2000"), ("12 Smith St, Fakeville A.C.T.2600", "ACT", "2600")]:
+        a = normalise_address(text)
+        rows.append((("glued to the postcode", text), (a.street_key, a.locality, a.state, a.postcode), ("SMITH STREET", "FAKEVILLE", state, postcode)))
+    for text, street_key, locality, state in [("12 Smith St. Fakeville NSW 2000", "SMITH STREET", "FAKEVILLE", "NSW"), ("12 St Kilda Rd, St Kilda VIC 3182", "SAINT KILDA ROAD", "SAINT KILDA", "VIC"),
+                                              ("12 Smith St, Fakeville Qld. 4000", "SMITH STREET", "FAKEVILLE", "QLD"), ("12 Smith St, Fakeville Vic. 3000", "SMITH STREET", "FAKEVILLE", "VIC"),
+                                              ("12 Smith St, Fakeville Act 2600", "SMITH STREET", "FAKEVILLE", "ACT"), ("12 Smith St, Fakeville WA 6000", "SMITH STREET", "FAKEVILLE", "WA")]:
+        a = normalise_address(text)
+        rows.append((("ordinary", text), (a.street_key, a.locality, a.state, "STATE_DOTS_REMOVED" in a.rules), (street_key, locality, state, False)))
+    assert len(rows) > 500
+    assert_table(rows)
+
+
+def test_a_dotted_state_links_like_the_plain_state():
+    """F5 (round 5). The record with `N.S.W.` links to the house the plain state links to, and is never a street called `SAINT INGOWICK SAINT CORREBY`."""
+    rows = []
+    for code, forms in DOTTED_STATES.items():
+        if code != "NSW":
+            continue
+        for form in forms:
+            d = decision(f"18 St Ingowick Street, Correby, {form} 2557", "", "", "")
+            plain = decision("18 St Ingowick Street, Correby, NSW 2557", "", "", "")
+            rows.append((("dotted", form), (d.outcome, d.rule, d.pid), (plain.outcome, plain.rule, plain.pid)))
+    assert decision("18 St Ingowick Street, Correby, NSW 2557", "", "", "").pid == "HOUSE18"
+    assert_table(rows)
+
+
+SPLIT_STREETS = [("12 Smith St", "12", "SMITH", "STREET"), ("7 Station St", "7", "STATION", "STREET"), ("12 St Kilda Rd", "12", "SAINT KILDA", "ROAD"), ("40 Harbour View Ave", "40", "HARBOUR VIEW", "AVENUE")]
+SPLIT_SUBURBS = [("Fakeville", "FAKEVILLE"), ("Mt Druitt", "MOUNT DRUITT"), ("Park Orchards", "PARK ORCHARDS"), ("St Albans", "SAINT ALBANS"), ("Dee Why", "DEE WHY")]
+
+
+def test_class_a_one_line_address_that_ends_with_a_suburb_and_no_state_is_split_at_the_street_type():
+    """CLASS-TABLE: F6 (round 5). `12 Smith St Fakeville` and `7 Station St Mt Druitt`, with no comma, no state and no postcode, are the street and the suburb, the same address as the comma form; St is the
+    street type and never SAINT. A line that does not end in a suburb is left as it was."""
+    rows = []
+    for front, (street_text, number, street_name, street_type), (suburb, locality) in itertools.product(["", "Unit 4, ", "4/", "Unit 4 "], SPLIT_STREETS, SPLIT_SUBURBS):
+        text = f"{front}{street_text} {suburb}"
+        a = normalise_address(text)
+        comma = normalise_address(f"{front}{street_text}, {suburb}")
+        rows.append((("parts", text), (a.number_first, a.street_name, a.street_type, a.locality, a.state, a.postcode), (number, street_name, street_type, locality, "", "")))
+        rows.append((("same as the comma form", text), a, comma))
+        rows.append((("rule", text), ("SUBURB_SPLIT_HEURISTIC" in a.rules, "SUBURB_FROM_LINE" in a.rules), (True, True)))
+        columns = normalise_address(text, "", "NSW", "2000")
+        rows.append((("the state and postcode in columns", text), (columns.street_key, columns.locality, columns.state, columns.postcode), (f"{street_name} {street_type}", locality, "NSW", "2000")))
+    # the ordinary inputs: nothing after the street type, a suffix, a unit word or a number after it, a street type last, a suburb given by a column
+    for text, street_key in [("12 Smith St", "SMITH STREET"), ("12 Smith St North", "SMITH STREET NORTH"), ("12 Smith St Upper", "SMITH STREET UPPER"), ("12 Smith St N", "SMITH STREET NORTH"),
+                             ("12 The Grove Road", "THE GROVE ROAD"), ("12 Smith Fakeville", "SMITH FAKEVILLE"), ("12 Smith Rd", "SMITH ROAD")]:
+        a = normalise_address(text)
+        rows.append((("ordinary", text), (a.locality, a.street_key, "SUBURB_SPLIT_HEURISTIC" in a.rules), ("", street_key, False)))
+    for text in ["12 Smith St Level 3", "12 Smith St 3/4", "12 Smith St Station Rd", "12 Smith St Lot 5", "12 Smith St Shop", "12 Smith St Elizabeth Grove"]:          # no digit, no unit word first, no street type last: a last word that is a street type may be a second street, so a suburb such as Elizabeth Grove is not split without a state or postcode
+        a = normalise_address(text)
+        rows.append((("not a suburb", text), (a.locality, "SUBURB_SPLIT_HEURISTIC" in a.rules), ("", False)))
+    for text in ["12 Smith St Fakeville", "7 Station St Mt Druitt"]:
+        a = normalise_address(text, "Fakeville" if "Fakeville" in text else "Mt Druitt")
+        rows.append((("suburb in a column", text), ("SUBURB_SPLIT_HEURISTIC" in a.rules, a.street_type), (False, "STREET")))
+    assert_table(rows)
+
+
+def test_a_one_line_address_with_a_suburb_and_no_state_links_like_the_comma_form():
+    """F6 (round 5). The record written `18 St Ingowick Street Correby` links to the house the comma form links to, and a street that is not there is not linked."""
+    rows = []
+    for text in ["18 St Ingowick Street Correby", "4 St Ingowick Street Correby", "4/18 St Ingowick Street Correby", "Unit 5, 18 St Ingowick Street Correby"]:
+        d = decision(text, "", "", "")
+        comma = decision(text.replace("Street Correby", "Street, Correby"), "", "", "")
+        rows.append((("same as the comma form", text), (d.outcome, d.rule, d.pid), (comma.outcome, comma.rule, comma.pid)))
+    assert decision("18 St Ingowick Street Correby", "", "", "").pid == "HOUSE18"
+    assert decision("4/18 St Ingowick Street Correby", "", "", "").pid == "FLAT4_IN_18"
+    assert_table(rows)
+
+
+LOT_IDS = [("5", "5"), ("12", "12"), ("7A", "7A"), ("07", "07")]
+LOT_PLANS = ["", " DP 12345", " DP12345", ", DP 12345", ", DP12345", " dp 12345", " SP 5521", " LP 4", " RP 1234", " CP 9", " PS 7", "/DP 12345", " on", " ON", " on DP 12345"]
+
+
+def test_class_a_lot_followed_by_a_plan_or_the_word_on_is_the_lot_and_the_plan_is_not_the_street():
+    """CLASS-TABLE: F8 (round 5). `Lot 5 DP 12345, Smith Rd`, `Lot 5, DP12345`, `Lot 5 SP 5521`, `Lot 12 on Smith Rd` and `Lot 5 on DP 12345` are lot 5 or 12 of Smith Road, the same address as `Lot 5 Smith Rd`:
+    the plan text never ends up in the street name."""
+    rows = []
+    for word, (ident, _), plan, (street_text, street_key), tail in itertools.product(["Lot", "LOT", "lot"], LOT_IDS, LOT_PLANS, [("Smith Rd", "SMITH ROAD"), ("Mount Pleasant Rd", "MOUNT PLEASANT ROAD")],
+                                                                                    ["", ", Fakeville NSW 2000"]):
+        text = f"{word} {ident}{plan} {street_text}{tail}"
+        a = normalise_address(text)
+        plain = normalise_address(f"{word} {ident} {street_text}{tail}")
+        rows.append((("parts", text), (a.lot, a.number_first, a.street_key), (ident.upper(), "", street_key)))
+        rows.append((("same as the plain lot", text), a, plain))
+        rows.append((("rule", text), "LOT_PLAN_DROPPED" in a.rules, bool(plan)))
+    for text in ["Lot 5 DP 12345, Smith Rd, Fakeville NSW 2000", "Lot 5, DP12345, Smith Rd", "Lot 5 on DP 12345, Smith Rd", "Lot 5 DP 12345 Smith Rd Fakeville NSW 2000"]:
+        a = normalise_address(text)
+        rows.append((("with commas", text), (a.lot, a.street_key, "LOT_PLAN_DROPPED" in a.rules), ("5", "SMITH ROAD", True)))
+    # the ordinary inputs: a lot with a street, a lot and a number, a street whose name starts with on or sp, a plan word with no number behind it
+    for text, lot, number, street_key in [("Lot 7 Smith Rd", "7", "", "SMITH ROAD"), ("Lot 7, Smith Road", "7", "", "SMITH ROAD"), ("Lot 12 Onslow Rd", "12", "", "ONSLOW ROAD"), ("Lot 5 Spring Rd", "5", "", "SPRING ROAD"),
+                                          ("Lot 5 Dp Smith Rd", "5", "", "DP SMITH ROAD"), ("Lot 7, 12 Smith St", "7", "12", "SMITH STREET"), ("Lot 3 Ontario St", "3", "", "ONTARIO STREET"),
+                                          ("Lot 5 Pse Rd", "5", "", "PSE ROAD")]:
+        a = normalise_address(text, *FAKE)
+        rows.append((("ordinary", text), (a.lot, a.number_first, a.street_key, "LOT_PLAN_DROPPED" in a.rules), (lot, number, street_key, False)))
+    assert len(rows) > 700
+    assert_table(rows)
+
+
+def test_class_a_lot_with_a_plan_links_to_the_lot_and_a_different_lot_is_a_new_property():
+    """CLASS-TABLE: F8 (round 5). G-NAF holds `Lot 5 Smith Rd`; the record with a plan or the word on links by EXACT_LOT, and lot 6 does not link to lot 5."""
+    rows = []
+    street = dict(street_name="SMITH", street_type="ROAD", locality="FAKEVILLE", state="NSW", postcode="2000")
+    reference = [Candidate("LOT5", Addr(lot="5", **street), 1.0, True, None), Candidate("LOT9", Addr(lot="9", **street), 1.0, True, None)]
+    for plan in LOT_PLANS:
+        d = decide(normalise_address(f"Lot 5{plan} Smith Rd", *FAKE), None, None, reference)
+        rows.append((("lot 5", plan), (d.outcome, d.rule, d.pid), ("link", "EXACT_LOT", "LOT5")))
+        other = decide(normalise_address(f"Lot 6{plan} Smith Rd", *FAKE), None, None, reference)
+        rows.append((("lot 6", plan), (other.outcome, other.rule), ("new", "NEW_DERIVED")))
     assert_table(rows)

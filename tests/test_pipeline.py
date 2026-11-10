@@ -380,3 +380,38 @@ def test_class_the_master_list_keeps_the_g_naf_spelling_for_a_g_naf_match_and_th
     bad = [r for r in rows if r[1] != r[2]]
     assert not bad, bad[:5]
     assert all(v[0] == "link" for v in d.values())
+
+
+# ---- the fifth review (final blind recall of corpus-round-4): a record with no suburb, and a level against the building's own address ----------------------------------------------------
+
+def test_class_a_record_with_no_suburb_that_links_to_nothing_is_no_locality_and_makes_no_derived_property(ref, conn, admin, tmp_path):
+    """CLASS-TABLE: F3 (round 5). `99 Nowhere St` with no suburb is set aside as NO_LOCALITY whatever state and postcode it carries, and no derived property is made for it; the same record with a suburb is a
+    new property, a record with no suburb but a postcode that finds its street still links, and reconcile accepts the new reason."""
+    from parcelkey.reconcile import reconcile
+
+    rows = [h.crm("C1", "99 Nowhere St", suburb="", state="", postcode=""), h.crm("C2", "99 Nowhere St", suburb="", state="NSW", postcode="2000"), h.crm("C3", "99 Nowhere St", suburb="", state="", postcode="2750"),
+            h.crm("C4", "Lot 99 Nowhere Rd", suburb="", state="", postcode=""), h.crm("C5", "99 Nowhere St"), h.crm("C6", "14 Smith St", suburb="", state="", postcode="2000"),
+            h.crm("C7", "99 Nowhere St, Fakeville NSW 2000", suburb="", state="", postcode="")]
+    d = run_crm(conn, admin, tmp_path, rows)
+    for rid in ("C1", "C2", "C3", "C4"):
+        assert d[f"crm:{rid}"] == ("quarantine", "NO_LOCALITY"), rid
+    assert d["crm:C5"][:2] == ("link", "NEW_DERIVED") and d["crm:C7"][:2] == ("link", "NEW_DERIVED") and d["crm:C5"][2] == d["crm:C7"][2]
+    assert d["crm:C6"] == ("link", "EXACT_KEY", "G14")
+    assert admin.execute("select count(*) from property where origin = 'derived'").fetchone()[0] == 1
+    detail = admin.execute("select detail from quarantine where record_id = 'crm:C1'").fetchone()[0]
+    assert detail["why"].startswith("no suburb")
+    with db.agency_tx(conn, AGENCY) as cur:
+        assert reconcile(cur, AGENCY).ok
+
+
+def test_class_a_floor_is_not_the_building_when_the_reference_holds_both(hand, conn, admin, tmp_path):
+    """CLASS-TABLE: F7 (round 5). G-NAF holds 100 Collins St, its level 3 and its level 5: `Level 3, 100 Collins St` links to level 3, `100 Collins St` to the building. Where G-NAF holds only floors (number 200)
+    the record with no level is set aside and links to no floor."""
+    hand([h.addr("GB", "100", street="COLLINS", locality="MELBOURNE", state="VIC", postcode="3000"), h.addr("GL3", "100", street="COLLINS", locality="MELBOURNE", state="VIC", postcode="3000", level="3"),
+          h.addr("GL5", "100", street="COLLINS", locality="MELBOURNE", state="VIC", postcode="3000", level="5"),
+          h.addr("GF3", "200", street="COLLINS", locality="MELBOURNE", state="VIC", postcode="3000", level="3"), h.addr("GF5", "200", street="COLLINS", locality="MELBOURNE", state="VIC", postcode="3000", level="5")])
+    texts = {"Level 3, 100 Collins St": "GL3", "L5/100 Collins St": "GL5", "Level 3/100 Collins St": "GL3", "100 Collins St": "GB", "Level 9, 100 Collins St": "GB", "Level 3, 200 Collins St": "GF3",
+             "Level 5/200 Collins St": "GF5", "200 Collins St": ("quarantine", "UNIT_CONFLICT")}
+    d = run_crm(conn, admin, tmp_path, [h.crm(f"C{i}", t, suburb="Melbourne", state="VIC", postcode="3000") for i, t in enumerate(texts)])
+    got = {t: d[f"crm:C{i}"][2] if d[f"crm:C{i}"][0] == "link" else d[f"crm:C{i}"] for i, t in enumerate(texts)}
+    assert got == texts

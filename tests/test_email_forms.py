@@ -120,3 +120,65 @@ def test_a_dot_inside_the_address_and_a_note_inside_a_display_name_are_not_trail
         (("a clean address fires nothing", ), normalise_email("kate@example.com"), ("kate@example.com", ())),
     ]
     assert_table(rows)
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------
+# the fifth review (final blind recall of corpus-round-4, finding F9): the placeholders a form is filled with are not identifiers, so they never merge two people
+
+PLACEHOLDER_ADDRESSES = ["noemail@noemail.com", "noemail@email.com", "noemail@gmail.com", "nomail@nomail.com", "no@email.com", "none@none.com", "no@no.com", "na@na.com", "n@n.com", "a@a.com",
+                         "test@test.com", "email@email.com", "unknown@unknown.com"]
+
+
+def test_class_a_placeholder_email_is_not_an_identifier_in_any_written_form():
+    """CLASS-TABLE: F9 (round 5). `noemail@noemail.com` and `test@test.com` (and the rest of the short list) are refused in every written form and case, with EMAIL_PLACEHOLDER and EMAIL_INVALID; an ordinary
+    address with the same local part or the same domain is kept."""
+    rows = []
+    for address, (form, (text, _)), upper in itertools.product(PLACEHOLDER_ADDRESSES, FORMS.items(), (False, True)):
+        got, rules = normalise_email(text.format(a=address.upper() if upper else address))
+        rows.append((("refused", address, form, upper), (got, "EMAIL_PLACEHOLDER" in rules, "EMAIL_INVALID" in rules), ("", True, True)))
+    for tail in [";", ".", " (Kate)", ","]:
+        got, rules = normalise_email("test@test.com" + tail)
+        rows.append((("refused behind a tail", tail), (got, "EMAIL_PLACEHOLDER" in rules), ("", True)))
+    # the ordinary inputs: the same local part on another domain, another local part on the same domain, and a real address that merely contains the word
+    for address in ["test@example.com", "test@testing.com", "noemail@example.com", "a@example.com", "kate@test.com", "info@test.com", "testing@test.com", "no@example.org", "na@na.com.au", "contact@noemail.com",
+                    "test.user@test.com", "email@email.com.au", "mytest@test.com", "none@none.org"]:
+        got, rules = normalise_email(address)
+        rows.append((("kept", address), (got, "EMAIL_PLACEHOLDER" in rules, "EMAIL_INVALID" in rules), (address, False, False)))
+    assert_table(rows)
+
+
+def national(prefix: str, digit: str) -> str:
+    """A ten digit Australian number: the trunk zero, the area or mobile digit, and eight times one digit."""
+    return "0" + prefix + digit * 8
+
+
+def phone_forms(number: str) -> list[str]:
+    """One number written the ways a CRM holds it."""
+    return [number, f"{number[:4]} {number[4:7]} {number[7:]}", f"+61{number[1:]}", f"+61 {number[1:4]} {number[4:7]} {number[7:]}", f"0061{number[1:]}", f"{number[:4]}-{number[4:7]}-{number[7:]}",
+            f"61{number[1:]}", f"({number[:2]}) {number[2:6]} {number[6:]}"]
+
+
+def test_class_a_phone_of_one_repeated_digit_is_a_placeholder_and_never_an_identifier():
+    """CLASS-TABLE: F9 (round 5). `0400 000 000`, `0411 111 111` and every mobile or landline whose last eight digits are one digit are refused with PHONE_PLACEHOLDER and PHONE_INVALID, in every written form;
+    a number that merely repeats some of its digits, or ends in 1, is read as before."""
+    from parcelkey.normalise import normalise_phone
+
+    rows = []
+    for prefix, digit in itertools.product(["4", "2", "3", "7", "8"], "0123456789"):
+        for form in phone_forms(national(prefix, digit)):
+            got, rules = normalise_phone(form)
+            rows.append((("placeholder", prefix, digit, form), (got, "PHONE_PLACEHOLDER" in rules, "PHONE_INVALID" in rules, "PHONE_E164" in rules), ("", True, True, False)))
+    for text in ["0400 000 000", "0411 111 111", "0444 444 444", "0499 999 999", "02 0000 0000", "+61 400 000 000"]:
+        got, rules = normalise_phone(text)
+        rows.append((("named", text), (got, "PHONE_PLACEHOLDER" in rules), ("", True)))
+    # the ordinary inputs: a number that differs from the placeholder in one digit, a number with a repeated half, fictional landlines, and what was always invalid
+    for text, want in [("0400 000 001", "+61400000001"), ("0411 111 112", "+61411111112"), ("0499 999 998", "+61499999998"), ("0412 345 678", "+61412345678"), ("0411 111 000", "+61411111000"),
+                       ("0400 123 400", "+61400123400"), ("02 5550 4836", "+61255504836"), ("+61 2 5550 1234", "+61255501234"), ("(02) 9999 8888", "+61299998888"), ("0455 555 556", "+61455555556"),
+                       ("02 1111 1112", "+61211111112"), ("07 3333 3334", "+61733333334")]:
+        got, rules = normalise_phone(text)
+        rows.append((("kept", text), (got, "PHONE_PLACEHOLDER" in rules, "PHONE_INVALID" in rules, "PHONE_E164" in rules), (want, False, False, True)))
+    for text in ["0000 000 000", "tbc", "1300 123 456", "123", "0111 111 111", "0511 111 111"]:
+        got, rules = normalise_phone(text)
+        rows.append((("still invalid, not a placeholder", text), (got, "PHONE_PLACEHOLDER" in rules, "PHONE_INVALID" in rules), ("", False, True)))
+    assert len(rows) > 400
+    assert_table(rows)

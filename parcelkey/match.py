@@ -7,14 +7,15 @@ Order of the rules:
   2. TRIGRAM        the street name is a near miss (pg_trgm similarity at or above the threshold), the number and unit are equal, and one candidate is clearly best.
   3. LOT rules      a record with a lot and no street number: an address that is only a lot links by EXACT_LOT; a numbered address that carries the same lot links
                     only when the record has a geocode within `lot_distance_m` (LOT_GEOCODE, ST_Distance on geography); otherwise it is set aside.
-  4. NEW_DERIVED    nothing in the reference is near: a property is made with an id derived from the canonical key.
+  4. NEW_DERIVED    nothing in the reference is near: a property is made with an id derived from the canonical key, unless the record has no suburb (NO_LOCALITY: set aside).
 
 Two hard rules sit above all of these and cannot be configured away:
-  * a different unit or flat number never matches (`units_conflict`), even when the street and number are equal
+  * a different unit or flat number never matches (`units_conflict`), even when the street and number are equal; a record with a level takes the candidate with that level, and a record with
+    no level and no unit never links to a floor (`_level_choice`)
   * a different street suffix never matches (`suffix_conflict`): Smith Street North and Smith Street South are two streets. A record with no suffix is the same street as either
   * a lot only record never merges with a numbered address unless a geocode is within distance
 
-Quarantine reasons: UNPARSEABLE, POSTAL_ADDRESS, AMBIGUOUS_TIE, BELOW_THRESHOLD, UNIT_CONFLICT, LOCALITY_CONFLICT, NUMBER_TRANSPOSED, LOT_NO_GEOCODE, LOT_TOO_FAR.
+Quarantine reasons: UNPARSEABLE, POSTAL_ADDRESS, AMBIGUOUS_TIE, BELOW_THRESHOLD, UNIT_CONFLICT, LOCALITY_CONFLICT, NUMBER_TRANSPOSED, LOT_NO_GEOCODE, LOT_TOO_FAR, NO_LOCALITY.
 """
 from __future__ import annotations
 
@@ -63,6 +64,24 @@ def units_conflict(a: Addr, b: Addr) -> bool:
     return bool(a.level and b.level and a.level != b.level)
 
 
+def _level_choice(rec: Addr, cands: list[Candidate]) -> list[Candidate]:
+    """Among candidates the unit rule lets through: a record with a level takes the candidate that has that level when there is one (the floor beats the building's own address); a record with
+    no level and no unit is the building and never one of its floors, so a candidate with a level is dropped. A record with a unit keeps every candidate that has the unit."""
+    if rec.level:
+        same = [c for c in cands if c.addr.level == rec.level]
+        return same or cands
+    if not rec.unit:
+        return [c for c in cands if not c.addr.level]
+    return cands
+
+
+def _new_property(rec: Addr) -> Decision:
+    """Nothing in the reference is near, so a property is made, unless the record has no suburb: a derived key with no locality is one id for every house of that number and street in the country."""
+    if not rec.locality:
+        return _set_aside("NO_LOCALITY", {"why": "no suburb and nothing in the reference to place it by: the address cannot be told from the same number and street anywhere else"})
+    return Decision("new", "NEW_DERIVED", 1.0)
+
+
 def suffix_conflict(a: Addr, b: Addr) -> bool:
     """True when both addresses name a street suffix and the two differ. A feed that leaves the suffix out is not in conflict: it may mean either street."""
     return bool(a.street_suffix and b.street_suffix and a.street_suffix != b.street_suffix)
@@ -106,7 +125,8 @@ def decide(rec: Addr, lat: float | None, lon: float | None, cands: list[Candidat
     if rec.lot and not rec.number_first:
         return _decide_lot(rec, lat, lon, pool, cfg)
     same_number = [c for c in pool if locality_ok(rec, c.addr) and numbers_equal(rec, c.addr) and not suffix_conflict(rec, c.addr)]
-    compatible = [c for c in same_number if not units_conflict(rec, c.addr)]
+    unit_compatible = [c for c in same_number if not units_conflict(rec, c.addr)]
+    compatible = _level_choice(rec, unit_compatible)
     if compatible:
         exact = [c for c in compatible if same_street(rec, c.addr)]
         if len(exact) == 1:
@@ -125,14 +145,17 @@ def decide(rec: Addr, lat: float | None, lon: float | None, cands: list[Candidat
             return Decision("link", "TRIGRAM", round(top.sim, 4), top.pid)
         return _set_aside("BELOW_THRESHOLD", {"best": _cand_detail([top]), "threshold": cfg.threshold})
     if same_number:
-        return _set_aside("UNIT_CONFLICT", {"record_unit": rec.unit, "candidate_units": sorted({c.addr.unit for c in same_number})})
+        detail = {"record_unit": rec.unit, "candidate_units": sorted({c.addr.unit for c in same_number})}
+        if unit_compatible:          # the units agree and only the level is in the way: a record with no level and no unit is not a floor
+            detail["candidate_levels"] = sorted({c.addr.level for c in unit_compatible})
+        return _set_aside("UNIT_CONFLICT", detail)
     other_locality = [c for c in pool if c.same_postcode and same_street(rec, c.addr) and numbers_equal(rec, c.addr) and not units_conflict(rec, c.addr)]
     if other_locality:
         return _set_aside("LOCALITY_CONFLICT", {"candidates": _cand_detail(other_locality)})
     swapped = [c for c in pool if locality_ok(rec, c.addr) and same_street(rec, c.addr) and is_transposition(rec.number_first, c.addr.number_first) and not units_conflict(rec, c.addr)]
     if swapped:
         return _set_aside("NUMBER_TRANSPOSED", {"candidates": _cand_detail(swapped)})
-    return Decision("new", "NEW_DERIVED", 1.0)
+    return _new_property(rec)
 
 
 def _decide_lot(rec: Addr, lat: float | None, lon: float | None, pool: list[Candidate], cfg: MatchConfig) -> Decision:
@@ -153,7 +176,7 @@ def _decide_lot(rec: Addr, lat: float | None, lon: float | None, pool: list[Cand
         if len(near) > 1:
             return _set_aside("AMBIGUOUS_TIE", {"candidates": _cand_detail(near)})
         return Decision("link", "LOT_GEOCODE", round(1.0 - near[0].dist_m / cfg.lot_distance_m, 4), near[0].pid, rules=("LOT_RESOLVED_BY_GEOCODE",))
-    return Decision("new", "NEW_DERIVED", 1.0)
+    return _new_property(rec)
 
 
 @dataclass

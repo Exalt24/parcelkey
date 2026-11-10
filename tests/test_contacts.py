@@ -187,3 +187,17 @@ def test_a_bridging_mention_is_ruled_a_bridge_and_a_contact_with_nothing_to_matc
     r, _ = resolve(conn, admin, tmp_path, rows)
     assert admin.execute("select record_id, rule from contact_link order by 1").fetchall() == [("crm:C1", "NEW"), ("crm:C2", "NEW"), ("crm:C3", "BRIDGE"), ("crm:C4", "NO_IDENTIFIER")]
     assert r.contacts.linked == {"NEW": 2, "BRIDGE": 1, "NO_IDENTIFIER": 1} and r.contacts.new == 3 and r.contacts.merged == 1
+
+
+def test_class_a_placeholder_phone_or_email_never_merges_strangers_and_a_real_one_still_does(clean, conn, admin, tmp_path):
+    """CLASS-TABLE: F9 (round 5). Ten records that carry `0400 000 000` or `test@test.com` are ten contacts, none set aside as CLUSTER_TOO_LARGE and no identifier stored, while two records that share a real number
+    or address are still one contact."""
+    placeholders = [("0400 000 000", ""), ("0411 111 111", ""), ("", "noemail@noemail.com"), ("", "test@test.com"), ("0400 000 000", "test@test.com")]
+    rows = [person(f"P{i}", f"Stranger {i}", email, phone) for i, (phone, email) in enumerate(placeholders * 2)]
+    rows += [person("R1", "Kate", "kate@example.com", "0412 345 678"), person("R2", "K Smith", "kate@example.com", ""), person("R3", "Jim", "", "0412 345 678"), person("R4", "Other", "other@example.com", "0412 345 679")]
+    r, links = resolve(conn, admin, tmp_path, rows)
+    stranger_contacts = {links[f"crm:P{i}"] for i in range(len(placeholders) * 2)}
+    assert len(stranger_contacts) == len(placeholders) * 2 and r.contacts.quarantined == 0
+    assert links["crm:R1"] == links["crm:R2"] == links["crm:R3"] and links["crm:R4"] != links["crm:R1"]
+    assert {v for (v,) in admin.execute("select value from contact_identifier").fetchall()} == {"kate@example.com", "+61412345678", "other@example.com", "+61412345679"}
+    assert admin.execute("select count(*) from contact_quarantine").fetchone()[0] == 0

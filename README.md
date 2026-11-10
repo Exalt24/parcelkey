@@ -6,7 +6,7 @@ Resolve messy property addresses into one master property id, with every decisio
 
 [![CI](https://github.com/Exalt24/parcelkey/actions/workflows/ci.yml/badge.svg)](https://github.com/Exalt24/parcelkey/actions/workflows/ci.yml)
 
-**On 4,904 made-up records parcelkey made 4,547 links and 4,529 were right: precision 99.60%, and recall 98.93% of the 4,578 records that should link, with no merge of two different units. Counting the 326 records its own policy sets aside as misses, honest recall is 92.35%.** The suite has 769 tests. The mutation check changed one guard at a time in 1,566 places (1,527 from the syntax tree of 13 modules, 39 named guards) and a test failed every time. That run was reduced: 15 Hypothesis examples per test instead of 60, and only the tests that cover the mutated module. Measured 2026-11-11, numbers and commands below.
+**On 4,904 made-up records parcelkey made 4,547 links and 4,529 were right: precision 99.60%, and recall 98.93% of the 4,578 records that should link, with no merge of two different units. Counting the 326 records its own policy sets aside as misses, honest recall is 92.35%.** The suite has 787 tests. The mutation check changed one guard at a time in 1,566 places (1,527 from the syntax tree of 13 modules, 39 named guards) and a test failed every time. That run was reduced: 15 Hypothesis examples per test instead of 60, and only the tests that cover the mutated module. Measured 2026-11-11, numbers and commands below.
 
 parcelkey takes address and contact records from three feeds (a CRM export, a listing feed, a sales history), matches each address to a row in a table in the public G-NAF layout on PostgreSQL with PostGIS, and gives every property one id that is stable for one G-NAF release file. It records the rule and the score behind every link, sets aside what it cannot decide with a reason, merges duplicate contacts only on a shared email or phone, and keeps each agency's rows apart with forced row level security. The caller names the agency, one database role serves all of them, and the master property list is shared. All data in this repository is made up.
 
@@ -44,7 +44,7 @@ flowchart LR
 | Block | Candidates in SQL on postcode and street key, locality and street key, and a trigram index for near misses. | `parcelkey/block.py` |
 | Match | Exact key, then pg_trgm similarity with a threshold and a tie margin, lots by `ST_Distance` on `geography`. A different unit never matches. | `parcelkey/match.py`, [docs/matching.md](docs/matching.md) |
 | Master id | `pk_g_` plus a hash of the G-NAF pid, else `pk_d_` plus a hash of the canonical key. Derived, never numbered, never reassigned, stable for one release file. | `parcelkey/master.py` |
-| Quarantine | Ties, below threshold, unit conflict, lot with no geocode or too far, transposed number, unreadable address, mailbox, each with a reason code and the candidates. A later run can free a record. | `quarantine` |
+| Quarantine | Ties, below threshold, unit conflict, lot with no geocode or too far, transposed number, unreadable address, mailbox, no suburb, each with a reason code and the candidates. A later run can free a record. | `quarantine` |
 | Contacts | Merge only on a shared normalised email or E.164 phone inside one agency, evidence kept. Never on a name. A crowd on one number is set aside. | `parcelkey/contacts.py` |
 | Permissions | `agency_id` in every key and forced row level security, with a non owner role. | `parcelkey/migrations/003_rls.sql` |
 | Reconcile | Re-reads the feed files with its own reader. Rows equal stored plus rejected plus unchanged, every record linked or quarantined, no orphan, one id per property. A derived property that a later release now covers is listed as SUPERSEDED and never rewritten. Exit 1 on any finding. | `parcelkey/reconcile.py` |
@@ -90,7 +90,7 @@ Also `quality`, `freshness --agency agency-a --max-age crm=168`, `quarantine --a
 
 ```
 python tools/pg.py up        # a missing database fails the tests, it never skips them
-python -m pytest             # 769 tests, about four and a half minutes
+python -m pytest             # 787 tests, about five minutes
 python tests/mutation_check.py --module normalise     # one module at a time; --guards runs the named guards; --summary totals them
 ```
 
