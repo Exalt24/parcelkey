@@ -2,12 +2,13 @@ Measured run, 2026-11-10
 Machine: Windows 11, 16 logical cores, Python 3.13, PostgreSQL 16 with PostGIS 3.4 in Docker on the same machine, other containers running.
 
 == python scripts/seed.py --out out/seed --seed 7
-{"seed": 7, "properties_in_gnaf": 4230, "new_builds_not_in_gnaf": 92, "agencies": {"agency-a": {"crm": 981, "listing": 662, "sales": 809}, "agency-b": {"crm": 981, "listing": 662, "sales": 809}}, "answer_key_rows": 4904}
+{"seed": 7, "properties_in_gnaf": 4230, "new_builds_not_in_gnaf": 92, "new_builds_in_feeds": 72, "agencies": {"agency-a": {"crm": 981, "listing": 662, "sales": 809}, "agency-b": {"crm": 981, "listing": 662, "sales": 809}}, "answer_key_rows": 4904}
 
 == python tools/measure.py --seed-dir out/seed
 measurement for agency-a against the answer key: 2452 records
   links made 2297: resolved 2290, wrong 7; quarantined as expected 144, missed 11, unprocessed 0
   precision 99.70% (2290 of 2297)   recall 99.26% (of 2307 records that should link)
+  honest recall 93.39% (2290 of 2452: the 145 records the matcher's own policy sets aside count as misses)
   merges of two different units in one building: 0
 
   defect class              records  resolved  quarantined  missed  wrong
@@ -56,12 +57,13 @@ data quality for agency-a
   quarantine: BELOW_THRESHOLD/open 12, LOT_NO_GEOCODE/open 34, LOT_TOO_FAR/open 9, NUMBER_TRANSPOSED/open 31, UNIT_CONFLICT/open 69
   properties used: derived 49, gnaf 1638
   contact mentions 1666 -> 1097 contacts (0 merged away, 0 set aside); no identifier 0, bad email 0, bad phone 25
-timings   ingest 1.30 s  normalise 1.37 s  match 4.84 s  contacts 4.76 s
+timings   ingest 1.50 s  normalise 1.58 s  match 6.20 s  contacts 5.40 s
 reconcile ok
 
 measurement for agency-b against the answer key: 2452 records
   links made 2250: resolved 2239, wrong 11; quarantined as expected 180, missed 22, unprocessed 0
   precision 99.51% (2239 of 2250)   recall 98.59% (of 2271 records that should link)
+  honest recall 91.31% (2239 of 2452: the 181 records the matcher's own policy sets aside count as misses)
   merges of two different units in one building: 0
 
   defect class              records  resolved  quarantined  missed  wrong
@@ -110,23 +112,27 @@ data quality for agency-b
   quarantine: BELOW_THRESHOLD/open 19, LOT_NO_GEOCODE/open 39, LOT_TOO_FAR/open 3, NUMBER_TRANSPOSED/open 50, UNIT_CONFLICT/open 91
   properties used: derived 39, gnaf 1630
   contact mentions 1672 -> 1129 contacts (0 merged away, 0 set aside); no identifier 3, bad email 0, bad phone 27
-timings   ingest 1.28 s  normalise 1.36 s  match 4.96 s  contacts 5.19 s
+timings   ingest 1.53 s  normalise 1.52 s  match 6.30 s  contacts 5.85 s
 reconcile ok
 
-gnaf load 0.63 s (8746 rows), reference build 0.21 s (4230 addresses)
+both agencies: 4904 records, links made 4547 (resolved 4529, wrong 18), quarantined as expected 324, missed 33
+  precision 99.60% (4529 of 4547)   recall 98.93% (4529 of 4578 that should link)   honest recall 92.35% (4529 of 4904, the 326 policy records counted as misses)
+gnaf load 0.68 s (9135 rows), reference build 0.23 s (4230 addresses)
 
 == python tools/measure.py --seed-dir out/seed --sweep 0.4,0.5,0.6,0.7,0.8
-threshold  links  wrong  precision   recall  missed  quarantined   (both agencies)
-     0.40   4564     25     99.45%   99.15%      16          324
-     0.50   4564     25     99.45%   99.15%      16          324
-     0.60   4547     18     99.60%   98.93%      33          324
-     0.70   4493     18     99.60%   97.75%      87          324
-     0.80   4426      0    100.00%   96.68%     152          326
+threshold  links  wrong  precision   recall   honest  missed  quarantined   (both agencies; honest = recall counting the policy records as misses)
+     0.40   4564     25     99.45%   99.15%   92.56%      16          324
+     0.50   4564     25     99.45%   99.15%   92.56%      16          324
+     0.60   4547     18     99.60%   98.93%   92.35%      33          324
+     0.70   4493     18     99.60%   97.75%   91.25%      87          324
+     0.80   4426      0    100.00%   96.68%   90.25%     152          326
 
 == python scripts/seed.py --out out/seed40k --seed 7 --addresses 40000, then python tools/measure.py --seed-dir out/seed40k
+{"seed": 7, "properties_in_gnaf": 40295, "new_builds_not_in_gnaf": 885, "new_builds_in_feeds": 747, "agencies": {"agency-a": {"crm": 9348, "listing": 6310, "sales": 7712}, "agency-b": {"crm": 9348, "listing": 6310, "sales": 7712}}, "answer_key_rows": 46740}
 measurement for agency-a against the answer key: 23370 records
   links made 21734: resolved 21720, wrong 14; quarantined as expected 1494, missed 142, unprocessed 0
   precision 99.94% (21720 of 21734)   recall 99.32% (of 21869 records that should link)
+  honest recall 92.94% (21720 of 23370: the 1501 records the matcher's own policy sets aside count as misses)
   merges of two different units in one building: 0
 
   defect class              records  resolved  quarantined  missed  wrong
@@ -175,12 +181,13 @@ data quality for agency-a
   quarantine: AMBIGUOUS_TIE/open 1, BELOW_THRESHOLD/open 85, LOCALITY_CONFLICT/open 2, LOT_NO_GEOCODE/open 373, LOT_TOO_FAR/open 32, NUMBER_TRANSPOSED/open 386, UNIT_CONFLICT/open 757
   properties used: derived 516, gnaf 15420
   contact mentions 15884 -> 10709 contacts (12 merged away, 0 set aside); no identifier 8, bad email 0, bad phone 186
-timings   ingest 12.84 s  normalise 35.94 s  match 112.28 s  contacts 83.01 s
+timings   ingest 13.07 s  normalise 14.16 s  match 77.78 s  contacts 84.97 s
 reconcile ok
 
 measurement for agency-b against the answer key: 23370 records
   links made 21748: resolved 21724, wrong 24; quarantined as expected 1456, missed 166, unprocessed 0
   precision 99.89% (21724 of 21748)   recall 99.15% (of 21910 records that should link)
+  honest recall 92.96% (21724 of 23370: the 1460 records the matcher's own policy sets aside count as misses)
   merges of two different units in one building: 0
 
   defect class              records  resolved  quarantined  missed  wrong
@@ -229,7 +236,9 @@ data quality for agency-b
   quarantine: AMBIGUOUS_TIE/open 9, BELOW_THRESHOLD/open 85, LOT_NO_GEOCODE/open 347, LOT_TOO_FAR/open 46, NUMBER_TRANSPOSED/open 385, UNIT_CONFLICT/open 750
   properties used: derived 492, gnaf 15312
   contact mentions 15937 -> 10682 contacts (6 merged away, 0 set aside); no identifier 8, bad email 0, bad phone 198
-timings   ingest 11.96 s  normalise 12.89 s  match 75.61 s  contacts 52.63 s
+timings   ingest 12.72 s  normalise 13.71 s  match 89.31 s  contacts 85.44 s
 reconcile ok
 
-gnaf load 1.40 s (83044 rows), reference build 1.60 s (40295 addresses)
+both agencies: 46740 records, links made 43482 (resolved 43444, wrong 38), quarantined as expected 2950, missed 308
+  precision 99.91% (43444 of 43482)   recall 99.23% (43444 of 43779 that should link)   honest recall 92.95% (43444 of 46740, the 2961 policy records counted as misses)
+gnaf load 2.08 s (85781 rows), reference build 2.22 s (40295 addresses)

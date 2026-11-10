@@ -1,12 +1,14 @@
 # parcelkey
 
+![Five messy spellings of one flat become one property id](docs/hero.svg)
+
 Resolve messy property addresses into one master property id, with every decision on record.
 
 [![CI](https://github.com/Exalt24/parcelkey/actions/workflows/ci.yml/badge.svg)](https://github.com/Exalt24/parcelkey/actions/workflows/ci.yml)
 
-parcelkey takes address and contact records from three feeds (a CRM export, a listing feed, a sales history), matches each address to a row in a table in the public G-NAF layout on PostgreSQL with PostGIS, and gives every property one stable id. It records the rule and the score behind every link, sets aside what it cannot decide with a reason, merges duplicate contacts only on a shared email or phone, and fences each agency's data off with forced row level security. All data in this repository is made up.
+**On 4,904 made-up records parcelkey made 4,547 links and 4,529 were right: precision 99.60%, and recall 98.93% of the 4,578 records that should link, with no merge of two different units. Counting the 326 records its own policy sets aside as misses, honest recall is 92.35%.** The suite has 684 tests. The mutation check changed one guard at a time in 1,278 places (1,239 from the syntax tree of 13 modules, 39 named guards) and a test failed every time. That run was reduced: 15 Hypothesis examples per test instead of 60, and only the tests that cover the mutated module. Measured 2026-11-10, numbers and commands below.
 
-**513 tests. All 1,110 mutants killed (1,071 from the syntax tree of 13 modules and 39 named guards). On 4,904 made-up records: precision 99.60%, recall 98.93%, no merge of two different units.** Measured 2026-11-10, numbers and commands below.
+parcelkey takes address and contact records from three feeds (a CRM export, a listing feed, a sales history), matches each address to a row in a table in the public G-NAF layout on PostgreSQL with PostGIS, and gives every property one id that is stable for one G-NAF release file. It records the rule and the score behind every link, sets aside what it cannot decide with a reason, merges duplicate contacts only on a shared email or phone, and keeps each agency's rows apart with forced row level security. The caller names the agency, one database role serves all of them, and the master property list is shared. All data in this repository is made up.
 
 ## What it is and why
 
@@ -14,7 +16,7 @@ A property data team gets the same house from many places. One feed writes `Unit
 
 parcelkey normalises each record and writes down which rules fired. It narrows the search with blocking. It matches on the exact key first, then on a typo tolerant street name with a threshold and a tie rule. Two hard rules cannot be switched off: a different unit never matches, and a lot only address never merges with a numbered one unless a geocode is within a distance. A record it cannot decide goes to quarantine with a reason code. A reconcile command proves that every source row is linked or set aside, that nothing is orphaned and that no property has two ids.
 
-The data is generated. `scripts/seed.py` writes about 4,200 addresses in the G-NAF table layout across five states, two agencies' feeds that refer to them with realistic defects, and a hidden answer key that only `parcelkey evaluate` reads. What was checked against Geoscape's published documents, and what was not, is in [docs/data-sources.md](docs/data-sources.md).
+The data is generated. `scripts/seed.py` writes about 4,200 addresses in the G-NAF table layout across five states, two agencies' feeds that refer to them with realistic defects, and a hidden answer key that only `parcelkey evaluate` reads. What was checked against Geoscape's published documents, and what was not, is in [docs/data-sources.md](docs/data-sources.md). What the answer key is, and what the accuracy figures cannot show, is in [docs/results.md](docs/results.md).
 
 ## How it works
 
@@ -36,17 +38,17 @@ flowchart LR
 
 | Stage | What it does | Where |
 |---|---|---|
-| Load G-NAF | Reads pipe delimited files named as Geoscape's guide shows (`NSW_ADDRESS_DETAIL_psv.psv`), columns by header name, and flattens them into `gnaf_address`. | `parcelkey/gnaf.py` |
+| Load G-NAF | Reads pipe delimited files named as Geoscape's guide shows (`NSW_ADDRESS_DETAIL_psv.psv`), columns by header name, and flattens them into `gnaf_address`. An alias address becomes one more spelling of its principal, never a property. | `parcelkey/gnaf.py` |
 | Ingest | Stores each feed row as received. A feed missing a column is refused whole. Bad rows go to `ingest_reject` with a reason. The same bytes again write nothing. | `parcelkey/ingest.py` |
-| Normalise | Unit forms, street types, Mount and Saint, case and punctuation, state names, lots, building names, phones to E.164, emails lower cased. The rule ids are stored on the row. | `parcelkey/normalise.py`, [docs/normalisation.md](docs/normalisation.md) |
+| Normalise | Unit forms (prefixes, zeros, floor words), all 275 G-NAF street types and street suffixes, Mount and Saint, case and punctuation, state names, lots, building names, phones to E.164, emails lower cased. A PO Box, GPO Box, Locked Bag or Private Bag is marked as a mailbox. A carspace is kept apart from a unit and a basement from a level. The rule ids are stored on the row. | `parcelkey/normalise.py`, [docs/normalisation.md](docs/normalisation.md) |
 | Block | Candidates in SQL on postcode and street key, locality and street key, and a trigram index for near misses. | `parcelkey/block.py` |
 | Match | Exact key, then pg_trgm similarity with a threshold and a tie margin, lots by `ST_Distance` on `geography`. A different unit never matches. | `parcelkey/match.py`, [docs/matching.md](docs/matching.md) |
-| Master id | `pk_g_` plus a hash of the G-NAF pid, else `pk_d_` plus a hash of the canonical key. Derived, never numbered, never reassigned. | `parcelkey/master.py` |
-| Quarantine | Ties, below threshold, unit conflict, lot with no geocode or too far, transposed number, unreadable address, each with a reason code and the candidates. A later run can free a record. | `quarantine` |
+| Master id | `pk_g_` plus a hash of the G-NAF pid, else `pk_d_` plus a hash of the canonical key. Derived, never numbered, never reassigned, stable for one release file. | `parcelkey/master.py` |
+| Quarantine | Ties, below threshold, unit conflict, lot with no geocode or too far, transposed number, unreadable address, mailbox, each with a reason code and the candidates. A later run can free a record. | `quarantine` |
 | Contacts | Merge only on a shared normalised email or E.164 phone inside one agency, evidence kept. Never on a name. A crowd on one number is set aside. | `parcelkey/contacts.py` |
 | Permissions | `agency_id` in every key and forced row level security, with a non owner role. | `parcelkey/migrations/003_rls.sql` |
-| Reconcile | Re-reads the feed files with its own reader. Rows equal stored plus rejected plus unchanged, every record linked or quarantined, no orphan, one id per property. Exit 1 on any finding. | `parcelkey/reconcile.py` |
-| Freshness, quality, evaluate | Last load against a maximum age (exit 1 when stale). What the feeds looked like. Precision and recall against the answer key. | `freshness.py`, `quality.py`, `evaluate.py` |
+| Reconcile | Re-reads the feed files with its own reader. Rows equal stored plus rejected plus unchanged, every record linked or quarantined, no orphan, one id per property. A derived property that a later release now covers is listed as SUPERSEDED and never rewritten. Exit 1 on any finding. | `parcelkey/reconcile.py` |
+| Freshness, quality, evaluate | Last load against a maximum age (exit 1 when stale). What the feeds looked like. Precision, recall and honest recall against the answer key. | `freshness.py`, `quality.py`, `evaluate.py` |
 
 ## Measured results
 
@@ -54,49 +56,21 @@ All from my runs on 2026-11-10 (Windows 11, 16 logical cores, PostgreSQL 16 with
 
 | What | Result | How |
 |---|---|---|
-| Generated world | 4,230 addresses in the G-NAF layout (5 states, 37 localities, 226 streets) plus 92 addresses that are in the feeds and not in the file; 4,904 source rows in two agencies (each 981 CRM, 662 listing, 809 sales) | `python scripts/seed.py --out out/seed --seed 7` |
-| G-NAF load | 8,746 rows in 0.63 s, flat reference of 4,230 addresses in 0.21 s | `python -m parcelkey load-gnaf out/seed/gnaf` |
-| Links | 4,547 made, 4,529 right: **precision 99.60%**. Of 4,578 records that should link, 4,529 did: **recall 98.93%** | `python tools/measure.py --seed-dir out/seed` |
+| Generated world | 4,230 addresses in the G-NAF layout (5 states, 37 localities, 226 streets) plus 92 new addresses made that are not in the file, 72 of which the feeds use; 4,904 source rows in two agencies (each 981 CRM, 662 listing, 809 sales) | `python scripts/seed.py --out out/seed --seed 7` |
+| G-NAF load | 9,135 rows in 0.68 s, flat reference of 4,230 addresses in 0.23 s | `python -m parcelkey load-gnaf out/seed/gnaf` |
+| Links | 4,547 made, 4,529 right: **precision 99.60%**. Of 4,578 records that should link, 4,529 did: **recall 98.93%**. Counting the 326 records the matcher's own policy sets aside as misses: **honest recall 92.35%** (4,529 of 4,904) | `python tools/measure.py --seed-dir out/seed` |
 | Set aside | 357 in quarantine: 324 where the answer key says that is right, 33 that could have linked | same |
-| Wrong links | 18, of which 10 are one new address repeated ten times, merged into a street one letter different | same |
+| Wrong links | 18, of which 16 are new addresses (not_in_gnaf) merged into a street one letter different | same |
 | Different units merged | 0 | same |
-| Contacts | 3,338 mentions became 2,226 contacts: pair precision 100.00%, pair recall 93.99% | same |
-| One agency, 2,452 records | ingest 1.3 s, normalise 1.4 s, match 4.8 s, contacts 4.8 s | same |
-| Ten times the data | precision 99.91%, recall 99.23%; one agency of 23,370 records matched in 112 s (the other in 76 s) | [docs/results.md](docs/results.md) |
+| Contacts | 3,338 mentions became 2,226 contacts: pair precision 100.00%, pair recall 93.99%. The generator never makes two people share an email or phone, so the 100.00% holds by construction and shows no real world rate | same |
+| One agency, 2,452 records | ingest 1.5 s, normalise 1.6 s, match 6.2 s, contacts 5.4 s | same |
+| Ten times the data | precision 99.91%, recall 99.23%, honest recall 92.95%; one agency of 23,370 records matched in 78 s (the other in 89 s) | [docs/results.md](docs/results.md) |
 
-Which defect classes were resolved, set aside or missed, both agencies together. Each record has one primary defect.
-
-| Defect class | Records | Resolved | Set aside | Missed | Wrong |
-|---|---|---|---|---|---|
-| clean | 1,250 | 1,250 | 0 | 0 | 0 |
-| street_abbrev (St, Str, Rd, Ave) | 561 | 561 | 0 | 0 | 0 |
-| mount_saint | 47 | 47 | 0 | 0 | 0 |
-| case_punct | 280 | 280 | 0 | 0 | 0 |
-| unit_word (`Unit 5, 12 Smith St`) | 279 | 279 | 0 | 0 | 0 |
-| unit_slash (`5/12 Smith St`) | 255 | 255 | 0 | 0 | 0 |
-| unit_apt (`Apt 5 12 Smith Street`) | 171 | 171 | 0 | 0 | 0 |
-| unit_u_slash (`U5/12`) | 169 | 169 | 0 | 0 | 0 |
-| unit_flat (`Flat 5`) | 158 | 158 | 0 | 0 | 0 |
-| level_suite (`Level 3 Suite 7`) | 58 | 58 | 0 | 0 | 0 |
-| tower_no_unit_parent (the tower has its own address) | 13 | 13 | 0 | 0 | 0 |
-| tower_no_unit_noparent | 98 | 0 | 97 | 0 | 1 |
-| unit_unknown (a flat the file does not have) | 66 | 0 | 66 | 0 | 0 |
-| lot_exact (a lot only address in the file) | 71 | 71 | 0 | 0 | 0 |
-| lot_geocoded (lot, coordinates close) | 26 | 26 | 0 | 0 | 0 |
-| lot_no_geo (lot, no coordinates) | 73 | 0 | 73 | 0 | 0 |
-| lot_far (lot, coordinates 300 to 600 m off) | 12 | 0 | 12 | 0 | 0 |
-| postcode_missing | 219 | 219 | 0 | 0 | 0 |
-| postcode_wrong | 186 | 186 | 0 | 0 | 0 |
-| postcode_transposed | 80 | 80 | 0 | 0 | 0 |
-| number_transposed (street number digits swapped) | 77 | 0 | 76 | 0 | 1 |
-| street_typo | 115 | 105 | 0 | 10 | 0 |
-| not_in_gnaf (a new address, several records each) | 320 | 281 | 0 | 23 | 16 |
-| combined (unit form, abbreviation, case, no postcode) | 320 | 320 | 0 | 0 | 0 |
-| **Total** | **4,904** | **4,529** | **324** | **33** | **18** |
+Which defect classes were resolved, set aside or missed is in [docs/results.md](docs/results.md).
 
 ## Run it
 
-You need Python 3.11 or newer and Docker. PostgreSQL 16 with PostGIS runs in a container on port 5436. No accounts, keys or downloads.
+You need Python 3.11 or newer and Docker. PostgreSQL 16 with PostGIS runs in a container on port 5436. There are no accounts or keys. The first `python tools/pg.py up` pulls the `postgis/postgis:16-3.4` image, which takes a few minutes on a slow link, and `pip install` fetches three packages.
 
 ```
 python -m venv .venv
@@ -116,33 +90,33 @@ Also `quality`, `freshness --agency agency-a --max-age crm=168`, `quarantine --a
 
 ```
 python tools/pg.py up        # a missing database fails the tests, it never skips them
-python -m pytest             # 513 tests, about two minutes
+python -m pytest             # 684 tests, about two and a half minutes
 python tests/mutation_check.py --module normalise     # one module at a time; --guards runs the named guards; --summary totals them
 ```
 
-What the suites cover, the planted bugs and how the mutation check works are in [docs/tests.md](docs/tests.md). The mutation results are in [docs/mutation-results.txt](docs/mutation-results.txt). CI runs the suite against a PostGIS service container.
+What the suites cover, the planted bugs and how the mutation check works are in [docs/tests.md](docs/tests.md). The mutation results are in [docs/mutation-results.txt](docs/mutation-results.txt). A CI workflow is configured and has not run, because this repository has no remote yet. The tests have run on Windows 11 with Python 3.13 only.
 
 ## What was hard
 
 - **A first measurement that was too good.** The first run gave 100.00% precision at every threshold, because the generated street names were far apart and a typo never had a rival. I added look-alike streets in one suburb (Harwick Street beside Hardwick Street) and addresses missing from the file. Precision fell to the numbers above and showed the real failure: a new address whose street is one letter from an existing street gets merged into that street's number. No threshold below 0.80 fixes it.
-- **A guard the mutation check found missing.** The glued unit form (`U5/12`) had its own marker list, and the word form had another. `Room5/12` and `Townhouse5/12` were not read. Both forms now read one list.
-- **A second run that "wrote nothing" and wrote.** The first rerun test compared row values, so a quarantine row rewritten with the same values passed. The snapshot now includes each row's `xmin`, and the matcher writes a quarantine row only when its reason or detail changed.
-- **Two kinds of lot.** A lot that is its own address in the file links by its lot number. A lot that has since been numbered links only through a geocode within 50 m, measured on the earth with `ST_Distance` on `geography`; a test places points about 37 m east and 44 m north to show that degrees are not used.
-- **A database that was ready twice.** The container image answers on its socket while it initialises, then restarts, so `tools/pg.py` probes over TCP. Two test databases starting at once also raced to set one cluster wide role setting; `init_db` reads it first and retries.
-- **Dead code the mutants pointed at.** About a dozen mutants survived on code that did not matter, such as a second building name rule and an accounting sum that two other checks covered. They were deleted, not excused.
+
+The other seven, among them a wider street type list that broke ordinary suburbs and a suffix that made a coin flip, are in [docs/what-was-hard.md](docs/what-was-hard.md).
 
 ## Limits
 
 - The data is made up. The addresses are in the public G-NAF table layout and are not G-NAF. Names are built from syllables and common given names, emails are on `example.com`, phones are landline numbers in the 5550 range ACMA reserves for fiction.
 - The loader for real G-NAF files was only run on files that `scripts/seed.py` wrote in the same layout. It has not read a real Geoscape release. File names, the pipe delimiter and the header row come from Geoscape's unpacking guide, column types from the Data Product Description. Real files may differ in ways those pages do not say.
-- Eight tables of a real release are modelled. ADDRESS_ALIAS, ADDRESS_SITE, mesh blocks and the rest are skipped and reported. An address with no street is left out of the flat reference.
-- Match time grows faster than the record count: ten times the records took 15 to 23 times as long. The trigram branch reads an index over the whole address table. Nothing near the real file's 15 million addresses has been tried.
-- English style addresses only: no PO boxes, rural or intersection addresses, no street suffix such as `NORTH`, no suburb typos (the suburb must agree exactly), no postcode inference.
+- Ten tables of a real release are modelled: STATE, LOCALITY, STREET_LOCALITY, ADDRESS_DETAIL, ADDRESS_ALIAS, PRIMARY_SECONDARY, ADDRESS_DEFAULT_GEOCODE and the three authority code tables. ADDRESS_SITE, ADDRESS_FEATURE, mesh blocks and the rest are skipped and reported. An address with no street is left out of the flat reference. PRIMARY_SECONDARY is loaded and the matcher does not use it.
+- There are no parcels. `legal_parcel_id` is loaded from ADDRESS_DETAIL and nothing reads it: no parcel boundaries, no cadastre, and no roll up from addresses to parcels.
+- Match time grows faster than the record count (see the ten times run). Nothing near the real file's 15 million addresses has been tried.
+- English style addresses only. A PO Box, GPO Box, Locked Bag or Private Bag is set aside as POSTAL_ADDRESS, also when a street comes with it. Rural and intersection addresses have no street number and are set aside as unparseable. A street suffix is read only straight after a street type, and with no comma and no suburb field it is read as part of the suburb. There are no suburb typos (the suburb must agree exactly) and no postcode inference; only an NT postcode gets its lost zero back.
+- Only 15 of G-NAF's 53 flat types are kept apart from a unit (a carspace, a garage and the like). `Shop 3` and `Unit 3` in one building read as one unit. `L3/12` is read as level 3 of number 12, where it could be a flat called L3.
 - No licensed property data is used or imitated: nothing from CoreLogic, Domain, REA or Pricefinder.
-- A near miss street name is a similarity score, not knowledge. A new address whose street is close to an existing one can merge into it, and a street number that is a digit swap of a neighbour's is set aside, which also sets aside a genuine new address with such a number. Both show in the measured misses and wrong links.
+- A near miss street name is a similarity score, not knowledge. A new address whose street is close to an existing one can merge into it, and a genuine new address whose number is a digit swap of a neighbour's is set aside. Both show in the measured misses and wrong links.
 - A phone shared by two real people merges them. The cluster cap limits the damage. Two mentions of one person with no shared email or phone stay two contacts, by design.
 - A record that changes after loading is rejected as CHANGED_AFTER_LOAD, not applied. A feed delivered again with identical bytes does not refresh its age in the freshness monitor.
-- The master property list is shared by every agency and holds addresses only. An agency's own address that is not in G-NAF becomes a derived row other agencies can read. Everything that says who holds a record is agency scoped.
+- The master property list is shared by every agency and holds addresses only. An agency's own address that is not in G-NAF becomes a derived row other agencies can read. Everything that says who holds a record is agency scoped. The caller names the agency for each transaction and one database role serves every agency, so row level security keeps a transaction to the agency it named and does not stop a caller that names another.
+- A derived id stays derived after its address reaches G-NAF. `reconcile` lists those properties as SUPERSEDED and a person decides what to merge. The G-NAF id hashes ADDRESS_DETAIL_PID, and ADDRESS_FEATURE, which tracks a pid across releases, is not modelled, so a re-issued pid gives a new id.
 - Nothing is deployed. One machine, one database, no TLS, no scheduler, no web app.
 
 ## Stack
