@@ -5,15 +5,15 @@ Each mutant changes one guard or value in a copy of the code; a mutant counts as
 block            10 mutants    10 killed    0 survived
 contacts         39 mutants    39 killed    0 survived
 db               81 mutants    81 killed    0 survived
-evaluate         79 mutants    79 killed    0 survived
+evaluate         83 mutants    83 killed    0 survived
 freshness        38 mutants    38 killed    0 survived
-gnaf             45 mutants    45 killed    0 survived
+gnaf             54 mutants    54 killed    0 survived
 named guards     39 mutants    39 killed    0 survived
 ingest           50 mutants    50 killed    0 survived
 master           11 mutants    11 killed    0 survived
-match           201 mutants   201 killed    0 survived
-normalise       376 mutants   376 killed    0 survived
+match           212 mutants   212 killed    0 survived
+normalise       515 mutants   515 killed    0 survived
 quality          18 mutants    18 killed    0 survived
-reconcile       101 mutants   101 killed    0 survived
+reconcile       106 mutants   106 killed    0 survived
 records          22 mutants    22 killed    0 survived
-total          1110 mutants  1110 killed    0 survived
+total          1278 mutants  1278 killed    0 survived

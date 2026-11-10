@@ -14,8 +14,11 @@ from parcelkey.pipeline import run_agency
 STATE_NAMES = {"NSW": "NEW SOUTH WALES", "VIC": "VICTORIA", "QLD": "QUEENSLAND", "WA": "WESTERN AUSTRALIA", "SA": "SOUTH AUSTRALIA"}
 
 
-def addr(pid, number="", street="SMITH", type="STREET", locality="FAKEVILLE", state="NSW", postcode="2000", unit="", level="", lot="", building="", lat=-33.80, lon=151.00):
-    return dict(pid=pid, number=number, street=street, type=type, locality=locality, state=state, postcode=postcode, unit=unit, level=level, lot=lot, building=building, lat=lat, lon=lon)
+def addr(pid, number="", street="SMITH", type="STREET", locality="FAKEVILLE", state="NSW", postcode="2000", unit="", level="", lot="", building="", lat=-33.80, lon=151.00,
+         suffix="", flat_type="", level_type="", alias_of=""):
+    """One hand written G-NAF address. `suffix` is a STREET_SUFFIX_AUT code, `flat_type` and `level_type` are authority codes, and `alias_of` makes this row an alias of that pid."""
+    return dict(pid=pid, number=number, street=street, type=type, locality=locality, state=state, postcode=postcode, unit=unit, level=level, lot=lot, building=building, lat=lat, lon=lon,
+                suffix=suffix, flat_type=flat_type, level_type=level_type, alias_of=alias_of)
 
 
 def set_reference(admin_dsn: str, addresses: list[dict]) -> None:
@@ -33,17 +36,20 @@ def set_reference(admin_dsn: str, addresses: list[dict]) -> None:
             if lk not in localities:
                 localities[lk] = f"L{len(localities) + 1}"
                 cur.execute("insert into locality values (%s, '2016-02-01', null, %s, %s, 'G', %s, null, null)", (localities[lk], a["locality"], a["postcode"], a["state"]))
-            sk = (localities[lk], a["street"], a["type"])
+            sk = (localities[lk], a["street"], a["type"], a["suffix"])
             if sk not in streets:
                 streets[sk] = f"S{len(streets) + 1}"
-                cur.execute("insert into street_locality values (%s, '2016-02-01', null, 'C', %s, %s, null, %s, null, null, null)", (streets[sk], a["street"], a["type"], localities[lk]))
+                cur.execute("insert into street_locality values (%s, '2016-02-01', null, 'C', %s, %s, %s, %s, null, null, null)", (streets[sk], a["street"], a["type"], a["suffix"] or None, localities[lk]))
             flat = a["unit"]
             suffix = flat[-1] if flat and flat[-1].isalpha() else None
             flat_number = flat[:-1] if suffix else flat
             cur.execute(
-                """insert into address_detail (address_detail_pid, date_created, building_name, lot_number, flat_number, flat_number_suffix, level_number, number_first, street_locality_pid, locality_pid,
-                                               postcode, address_site_pid, level_geocoded_code) values (%s, '2016-02-01', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 7)""",
-                (a["pid"], a["building"] or None, a["lot"] or None, flat_number or None, suffix, a["level"] or None, a["number"] or None, streets[sk], localities[lk], a["postcode"], a["pid"] + "S"))
+                """insert into address_detail (address_detail_pid, date_created, building_name, lot_number, flat_type_code, flat_number, flat_number_suffix, level_type_code, level_number, number_first,
+                                               street_locality_pid, locality_pid, postcode, address_site_pid, level_geocoded_code, alias_principal) values (%s, '2016-02-01', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 7, %s)""",
+                (a["pid"], a["building"] or None, a["lot"] or None, a["flat_type"] or None, flat_number or None, suffix, a["level_type"] or None, a["level"] or None, a["number"] or None,
+                 streets[sk], localities[lk], a["postcode"], a["pid"] + "S", "A" if a["alias_of"] else None))
+            if a["alias_of"]:
+                cur.execute("insert into address_alias values (%s, '2016-02-01', null, %s, %s, 'SYN', null)", (a["pid"] + "AL", a["alias_of"], a["pid"]))
             cur.execute("insert into address_default_geocode values (%s, '2016-02-01', null, %s, 'PC', %s, %s)", (a["pid"] + "G", a["pid"], a["lon"], a["lat"]))
         gnaf.build_reference(conn)
 

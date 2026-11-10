@@ -1,0 +1,72 @@
+{"input": {"line": "PO Box 5", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "a mailbox has no property; matching it to a street mints a wrong link or a derived property", "source": "invented"}
+{"input": {"line": "PO Box 5 Fakeville NSW 2000", "suburb": null, "state": null, "postcode": null}, "expect": "fail", "why": "no comma form comes out with the box as building and the suburb as the street", "source": "invented"}
+{"input": {"line": "Locked Bag 5 Fakeville NSW 2000", "suburb": null, "state": null, "postcode": null}, "expect": "fail", "why": "Locked Bag is a postal address", "source": "invented"}
+{"input": {"line": "GPO Box 1234 Sydney NSW 2001", "suburb": null, "state": null, "postcode": null}, "expect": "fail", "why": "GPO Box is a postal address", "source": "real"}
+{"input": {"line": "Private Bag 7 Fakeville NSW 2000", "suburb": null, "state": null, "postcode": null}, "expect": "fail", "why": "Private Bag is a postal address", "source": "invented"}
+{"input": {"line": "P.O. Box 88, Fakeville NSW 2000", "suburb": null, "state": null, "postcode": null}, "expect": "fail", "why": "dotted PO box form", "source": "invented"}
+{"input": {"line": "Box Hill Road 12", "suburb": "Fakeville", "state": "VIC", "postcode": "3128"}, "expect": "pass", "why": "a real street name that starts with Box must not be refused", "source": "real"}
+{"input": {"line": "12 Box Street", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "a street called Box Street is an ordinary address", "source": "invented"}
+{"input": {"line": "12 Smith St North", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "street suffix NORTH must be kept as a suffix, not SAINT NORTH", "source": "real"}
+{"input": {"line": "12 Smith St N", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "suffix N is NORTH", "source": "real"}
+{"input": {"line": "12 Smith Street South", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "suffix SOUTH", "source": "invented"}
+{"input": {"line": "12 Smith Rd Upper", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "suffix UPPER", "source": "invented"}
+{"input": {"line": "12 St Kilda Rd", "suburb": "Melbourne", "state": "VIC", "postcode": "3004"}, "expect": "pass", "why": "a leading St is Saint and must still work", "source": "real"}
+{"input": {"line": "12 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "the ordinary form must be unchanged", "source": "real"}
+{"input": {"line": "G01/12 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "a flat number prefix G with a leading zero is a real G-NAF form (FLAT_NUMBER_PREFIX)", "source": "real"}
+{"input": {"line": "L3/12 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "a level prefix form", "source": "real"}
+{"input": {"line": "01/12 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "a leading zero must match G-NAF flat number 1", "source": "real"}
+{"input": {"line": "3/12 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "the ordinary slash form must be unchanged", "source": "real"}
+{"input": {"line": "Unit 3 12 Smith Street", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "the ordinary unit form must be unchanged", "source": "real"}
+{"input": {"line": "Ground Floor, 12 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "a ground level with no number must not become level 12", "source": "real"}
+{"input": {"line": "3rd Floor 12 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "an ordinal floor", "source": "real"}
+{"input": {"line": "Carspace 12, 40 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "a carspace is not the same as unit 12 (FLAT_TYPE_AUT CARS)", "source": "real"}
+{"input": {"line": "Basement 1, 40 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "basement 1 is not level 1 (LEVEL_TYPE_AUT B)", "source": "real"}
+{"input": {"line": "5 Park Gdns", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "GDNS is GARDENS in STREET_TYPE_AUT", "source": "real"}
+{"input": {"line": "9 Hill Hts", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "HTS is HEIGHTS", "source": "real"}
+{"input": {"line": "7 Ocean Prom", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "PROM is PROMENADE", "source": "real"}
+{"input": {"line": "3 Marine Pde", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "PDE is PARADE and was already mapped", "source": "real"}
+{"input": {"line": "12 Smith St", "suburb": "Darwin", "state": "NT", "postcode": "800"}, "expect": "pass", "why": "an NT postcode that lost its leading zero in a spreadsheet is 0800", "source": "real"}
+{"input": {"line": "12 Smith St", "suburb": "Darwin", "state": "NT", "postcode": "0800"}, "expect": "pass", "why": "the ordinary NT postcode", "source": "real"}
+{"input": {"line": "12 Smith St", "suburb": "Fakeville", "state": "OT", "postcode": "2899"}, "expect": "pass", "why": "OT is Other Territories in G-NAF STATE", "source": "real"}
+{"input": {"line": "12 Smith St", "suburb": "Fakeville", "state": "XX", "postcode": "2000"}, "expect": "fail", "why": "an unknown state is not a state", "source": "invented"}
+{"input": {"line": "12 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "20000"}, "expect": "fail", "why": "a postcode of five digits is bad shape", "source": "invented"}
+{"input": {"line": "Cnr Smith St & Jones Rd", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "G-NAF has no corner addresses and the line parses into junk", "source": "real"}
+{"input": {"line": "Lot 5 Smith Rd", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "a lot address must stay parseable", "source": "real"}
+{"input": {"line": "14 Box Hill Rd", "suburb": "Box Hill", "state": "VIC", "postcode": "3128"}, "expect": "pass", "why": "a real street called Box Hill Road is a street and sits next to the PO Box refusal", "source": "invented"}
+{"input": {"line": "12 Smith St South", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "street suffix SOUTH is kept with the street type", "source": "invented"}
+{"input": {"line": "12 Smith St North East", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "a two word street suffix", "source": "invented"}
+{"input": {"line": "12 Smith St, Bondi Beach", "suburb": null, "state": null, "postcode": null}, "expect": "pass", "why": "a suburb that ends in a street type word (Beach) must still split off the street", "source": "invented"}
+{"input": {"line": "12 Ocean Beach Rd Bondi NSW 2000", "suburb": null, "state": null, "postcode": null}, "expect": "pass", "why": "a street name that holds a street type word (Beach) must keep it as part of the name", "source": "invented"}
+{"input": {"line": "12 Smith St Park Orchards VIC 3114", "suburb": null, "state": null, "postcode": null}, "expect": "pass", "why": "a suburb that starts with a street type word (Park) must still split off the street", "source": "invented"}
+{"input": {"line": "5 Park Gdns Fakeville NSW 2000", "suburb": null, "state": null, "postcode": null}, "expect": "pass", "why": "a street type only G-NAF lists (GARDENS) in a one line address", "source": "invented"}
+{"input": {"line": "Shop G12, 40 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "a unit id with a letter prefix after a unit word", "source": "invented"}
+{"input": {"line": "Unit 05, 12 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "a leading zero after a unit word", "source": "invented"}
+{"input": {"line": "Mezzanine 2, 12 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "a level type that is not a plain level (LEVEL_TYPE_AUT M)", "source": "invented"}
+{"input": {"line": "Garage 4, 40 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "a garage is its own flat type (FLAT_TYPE_AUT GRGE)", "source": "invented"}
+{"input": {"line": "12 Smith St", "suburb": "Norfolk Island", "state": "OT", "postcode": "6798"}, "expect": "pass", "why": "OT is Other Territories in the G-NAF state list", "source": "invented"}
+{"input": {"line": "12 Smith St", "suburb": "Alice Springs", "state": "Northern Territory", "postcode": "870"}, "expect": "pass", "why": "an NT postcode that lost its leading zero, with the state written out", "source": "invented"}
+{"input": {"line": "Ground Floor 12 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "pass", "why": "a ground floor with no comma must not become level 12", "source": "invented"}
+{"input": {"line": "PO Box 12", "suburb": "Sydney", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "a mailbox in its own field is not a property", "source": "invented"}
+{"input": {"line": "GPO Box 5, Melbourne VIC 3001", "suburb": null, "state": null, "postcode": null}, "expect": "fail", "why": "GPO Box with a comma before the suburb", "source": "invented"}
+{"input": {"line": "Locked Bag 100, Parramatta NSW 2150", "suburb": null, "state": null, "postcode": null}, "expect": "fail", "why": "Locked Bag with a number of three digits", "source": "invented"}
+{"input": {"line": "Private Bag 3, Hobart TAS 7000", "suburb": null, "state": null, "postcode": null}, "expect": "fail", "why": "Private Bag with a comma before the suburb", "source": "invented"}
+{"input": {"line": "PO BOX 7 BRISBANE QLD 4001", "suburb": null, "state": null, "postcode": null}, "expect": "fail", "why": "upper case mailbox with no comma", "source": "invented"}
+{"input": {"line": "P O Box 99, Perth WA 6000", "suburb": null, "state": null, "postcode": null}, "expect": "fail", "why": "P O Box written with spaces", "source": "invented"}
+{"input": {"line": "G.P.O. Box 1234 Adelaide SA 5001", "suburb": null, "state": null, "postcode": null}, "expect": "fail", "why": "GPO written with full stops", "source": "invented"}
+{"input": {"line": "12 Smith St, PO Box 5", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "a line that carries a mailbox is set aside for a person to read; it is two addresses in one", "source": "invented"}
+{"input": {"line": "Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "a street with no number cannot name a property", "source": "invented"}
+{"input": {"line": "Unit 5", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "a unit with no street", "source": "invented"}
+{"input": {"line": "12", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "a number with no street", "source": "invented"}
+{"input": {"line": "N/A", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "a placeholder in the address column", "source": "invented"}
+{"input": {"line": "TBC", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "a placeholder in the address column", "source": "invented"}
+{"input": {"line": "unknown", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "a placeholder in the address column", "source": "invented"}
+{"input": {"line": "-", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "a dash typed to fill a required column", "source": "invented"}
+{"input": {"line": "5/12", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "a unit and number with no street", "source": "invented"}
+{"input": {"line": "Lot 7", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "a lot with no street", "source": "invented"}
+{"input": {"line": "Level 3", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "a level with no street", "source": "invented"}
+{"input": {"line": "Corner of Smith St and Jones Rd", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "an intersection has no street number", "source": "invented"}
+{"input": {"line": "Cnr George St & King St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "an intersection written with an ampersand", "source": "invented"}
+{"input": {"line": "Opposite the post office, Fakeville", "suburb": null, "state": null, "postcode": null}, "expect": "fail", "why": "a description of where a place is and not an address", "source": "invented"}
+{"input": {"line": "Near the school", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "a description of where a place is and not an address", "source": "invented"}
+{"input": {"line": "Unit 5 Smith St", "suburb": "Fakeville", "state": "NSW", "postcode": "2000"}, "expect": "fail", "why": "a unit and a street with no street number", "source": "invented"}
+{"input": {"line": "Fakeville NSW 2000", "suburb": null, "state": null, "postcode": null}, "expect": "fail", "why": "a suburb, a state and a postcode with no street", "source": "invented"}

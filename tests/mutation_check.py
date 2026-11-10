@@ -1,4 +1,4 @@
-# LIFESPAN: permanent (the repo's own mutation check, run by hand and by CI on the pure modules)
+# LIFESPAN: permanent (the repo's own mutation check, run by hand; the CI workflow does not run it)
 """Mutation check: remove or flip one guard at a time and require a failing test for each.
 
 Two kinds of mutant, both written into a COPY of the repository so the working tree is never touched:
@@ -42,7 +42,7 @@ COPY = ("parcelkey", "scripts", "tools", "tests", "docs", "brand", "pytest.ini",
 
 # module -> (pytest arguments for stage 1, timeout seconds, needs the database)
 TARGETS = {
-    "normalise": (["tests/test_normalise.py", "tests/test_match_unit.py"], 120, False),
+    "normalise": (["tests/test_normalise.py", "tests/test_match_unit.py", "tests/test_ordinary_addresses.py", "tests/test_corpus.py", "tests/test_gnaf_codes.py"], 120, False),
     "match": (["tests/test_match_unit.py", "tests/test_pipeline.py"], 300, True),
     "master": (["tests/test_pipeline.py", "tests/test_reconcile.py"], 300, True),
     "block": (["tests/test_pipeline.py"], 300, True),

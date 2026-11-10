@@ -8,7 +8,7 @@ the people are common given names with invented surnames, emails are on example.
 (0x) 5550 xxxx style that ACMA reserves for fiction. Nothing here comes from a real address file, a real person, or any licensed dataset.
 
 Output folder:
-  gnaf/Standard/<STATE>_<TABLE>_psv.psv      ADDRESS_DETAIL, ADDRESS_DEFAULT_GEOCODE, STREET_LOCALITY, LOCALITY, STATE (pipe delimited, header row)
+  gnaf/Standard/<STATE>_<TABLE>_psv.psv      ADDRESS_DETAIL, PRIMARY_SECONDARY, ADDRESS_DEFAULT_GEOCODE, STREET_LOCALITY, LOCALITY, STATE (pipe delimited, header row)
   gnaf/Authority Code/Authority_Code_<TABLE>_psv.psv   FLAT_TYPE_AUT, STREET_TYPE_AUT, LEVEL_TYPE_AUT
   <agency>/crm_export.csv, listing_feed.csv, sales_history.csv     the messy feeds
   answer_key.csv, truth_properties.csv     the hidden truth; the pipeline never reads these, only `parcelkey evaluate` does
@@ -293,7 +293,7 @@ class World:
             for j in range(1, per + 1):
                 seq += 1
                 unit = str(lv * 100 + j) if levelled else str(seq)
-                p = Prop("tower_flat", street, number=str(n), unit=unit, level=str(lv), building=name, building_id=bid, flat_type=r.choice(["UNIT", "APARTMENT"]), level_type="L")
+                p = Prop("tower_flat", street, number=str(n), unit=unit, level=str(lv), building=name, building_id=bid, flat_type=r.choice(["UNIT", "APT"]), level_type="L")
                 self._add(p, side, along)
                 p.lat, p.lon = self.props[-1].lat, self.props[-1].lon
                 count += 1
@@ -309,7 +309,7 @@ class World:
         base = None
         for u in range(1, k + 1):
             unit = f"{u}A" if letters and u % 2 else str(u)
-            p = Prop("block_flat", street, number=str(n), unit=unit, building_id=bid, flat_type=r.choice(["UNIT", "FLAT", "VILLA"]))
+            p = Prop("block_flat", street, number=str(n), unit=unit, building_id=bid, flat_type=r.choice(["UNIT", "FLAT", "VLLA"]))
             self._add(p, 1 if n % 2 else -1, n * 12.0)
             if base is None:
                 base = (p.lat, p.lon)
@@ -326,7 +326,7 @@ class World:
         base = None
         for lv in range(1, r.randint(2, 4) + 1):
             for j in range(1, r.randint(2, 4) + 1):
-                p = Prop("suite", street, number=str(n), unit=str(lv * 10 + j), level=str(lv), building=name, building_id=bid, flat_type="SUITE", level_type="L")
+                p = Prop("suite", street, number=str(n), unit=str(lv * 10 + j), level=str(lv), building=name, building_id=bid, flat_type="SE", level_type="L")
                 self._add(p, 1 if n % 2 else -1, n * 12.0)
                 if base is None:
                     base = (p.lat, p.lon)
@@ -381,6 +381,7 @@ class World:
             out[st.loc.state]["STREET_LOCALITY"].append({"STREET_LOCALITY_PID": st.pid, "DATE_CREATED": "2016-02-01", "STREET_CLASS_CODE": "C", "STREET_NAME": st.name.upper(),
                                                          "STREET_TYPE_CODE": st.type_code, "LOCALITY_PID": st.loc.pid})
         d0 = date(2016, 2, 1)
+        parents = {q.building_id: q for q in self.props if q.kind == "tower_parent"}
         for i, p in enumerate(self.props):
             state = p.street.loc.state
             created = (d0 + timedelta(days=i % 900)).isoformat()
@@ -389,8 +390,12 @@ class World:
             out[state]["ADDRESS_DETAIL"].append({
                 "ADDRESS_DETAIL_PID": p.pid, "DATE_CREATED": created, "BUILDING_NAME": p.building.upper(), "LOT_NUMBER": p.lot, "FLAT_TYPE_CODE": p.flat_type, "FLAT_NUMBER": flat_number,
                 "FLAT_NUMBER_SUFFIX": flat_suffix, "LEVEL_TYPE_CODE": p.level_type, "LEVEL_NUMBER": p.level, "NUMBER_FIRST": p.number, "STREET_LOCALITY_PID": p.street.pid,
-                "LOCALITY_PID": p.street.loc.pid, "POSTCODE": p.street.loc.postcode, "CONFIDENCE": "2", "ADDRESS_SITE_PID": p.pid + "S", "LEVEL_GEOCODED_CODE": "7", "PRIMARY_SECONDARY": "P",
+                "LOCALITY_PID": p.street.loc.pid, "POSTCODE": p.street.loc.postcode, "CONFIDENCE": "2", "ADDRESS_SITE_PID": p.pid + "S", "LEVEL_GEOCODED_CODE": "7",
+                "PRIMARY_SECONDARY": "S" if p.unit or p.level else "P",          # a secondary address is any address with flat or level information (Data Product Description, Appendix C)
             })
+            if p.building_id in parents and p.kind != "tower_parent":
+                out[state]["PRIMARY_SECONDARY"].append({"PRIMARY_SECONDARY_PID": p.pid + "P", "DATE_CREATED": created, "PRIMARY_PID": parents[p.building_id].pid, "SECONDARY_PID": p.pid,
+                                                        "PS_JOIN_TYPE_CODE": "1"})
             out[state]["ADDRESS_DEFAULT_GEOCODE"].append({"ADDRESS_DEFAULT_GEOCODE_PID": p.pid + "G", "DATE_CREATED": created, "ADDRESS_DETAIL_PID": p.pid, "GEOCODE_TYPE_CODE": "PC",
                                                           "LONGITUDE": f"{p.lon:.8f}", "LATITUDE": f"{p.lat:.8f}"})
         return out
@@ -402,6 +407,7 @@ HEADERS = {
                        "NUMBER_FIRST", "NUMBER_FIRST_SUFFIX", "NUMBER_LAST_PREFIX", "NUMBER_LAST", "NUMBER_LAST_SUFFIX", "STREET_LOCALITY_PID", "LOCATION_DESCRIPTION", "LOCALITY_PID",
                        "ALIAS_PRINCIPAL", "POSTCODE", "PRIVATE_STREET", "LEGAL_PARCEL_ID", "CONFIDENCE", "ADDRESS_SITE_PID", "LEVEL_GEOCODED_CODE", "PROPERTY_PID", "GNAF_PROPERTY_PID",
                        "PRIMARY_SECONDARY"],
+    "PRIMARY_SECONDARY": ["PRIMARY_SECONDARY_PID", "DATE_CREATED", "DATE_RETIRED", "PRIMARY_PID", "SECONDARY_PID", "PS_JOIN_TYPE_CODE", "PS_JOIN_COMMENT"],
     "ADDRESS_DEFAULT_GEOCODE": ["ADDRESS_DEFAULT_GEOCODE_PID", "DATE_CREATED", "DATE_RETIRED", "ADDRESS_DETAIL_PID", "GEOCODE_TYPE_CODE", "LONGITUDE", "LATITUDE"],
     "STREET_LOCALITY": ["STREET_LOCALITY_PID", "DATE_CREATED", "DATE_RETIRED", "STREET_CLASS_CODE", "STREET_NAME", "STREET_TYPE_CODE", "STREET_SUFFIX_CODE", "LOCALITY_PID",
                         "GNAF_STREET_PID", "GNAF_STREET_CONFIDENCE", "GNAF_RELIABILITY_CODE"],
@@ -409,7 +415,7 @@ HEADERS = {
     "STATE": ["STATE_PID", "DATE_CREATED", "DATE_RETIRED", "STATE_NAME", "STATE_ABBREVIATION"],
 }
 AUTHORITY = {
-    "FLAT_TYPE_AUT": [("UNIT", "UNIT"), ("APARTMENT", "APARTMENT"), ("FLAT", "FLAT"), ("SUITE", "SUITE"), ("VILLA", "VILLA")],
+    "FLAT_TYPE_AUT": [("UNIT", "UNIT"), ("APT", "APARTMENT"), ("FLAT", "FLAT"), ("SE", "SUITE"), ("VLLA", "VILLA")],
     "STREET_TYPE_AUT": [(t, t) for t in STREET_TYPES],
     "LEVEL_TYPE_AUT": [("L", "LEVEL")],
 }
@@ -831,7 +837,9 @@ def generate(out: Path, seed: int = 7, addresses: int = 4000, per_agency: int | 
     truth = [{"pid": p.pid, "building_id": p.building_id, "unit": p.unit, "kind": p.kind, "canon_key": ""} for p in world.props]
     truth += [{"pid": "", "building_id": "", "unit": "", "kind": "new_build", "canon_key": p.addr.canon_key} for p in world.new_builds]
     _write_csv(out / "truth_properties.csv", truth, ["pid", "building_id", "unit", "kind", "canon_key"])
+    used = {k["truth_canon_key"] for k in key if k["truth_canon_key"]}
     manifest = {"seed": seed, "addresses_requested": addresses, "gnaf_rows": counts, "properties_in_gnaf": len(world.props), "new_builds_not_in_gnaf": len(world.new_builds),
+                "new_builds_in_feeds": len(used),
                 "agencies": manifest_agencies, "classes": CLASSES, "contact_classes": CONTACT_CLASSES, "answer_key_rows": len(key)}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     return manifest
@@ -845,7 +853,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--per-agency", type=int, default=None, help="source rows per agency across the three feeds (default 58 percent of the addresses)")
     a = ap.parse_args(argv)
     manifest = generate(Path(a.out), a.seed, a.addresses, a.per_agency)
-    print(json.dumps({k: manifest[k] for k in ("seed", "properties_in_gnaf", "new_builds_not_in_gnaf", "agencies", "answer_key_rows")}))
+    print(json.dumps({k: manifest[k] for k in ("seed", "properties_in_gnaf", "new_builds_not_in_gnaf", "new_builds_in_feeds", "agencies", "answer_key_rows")}))
     return 0
 
 

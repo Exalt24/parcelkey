@@ -7,6 +7,8 @@ not modelled here is skipped and reported. Nothing is guessed: a value that does
 This loader was only run on files written by scripts/seed.py in the same layout. It has not read a real Geoscape release.
 
 `build_reference` turns ADDRESS_DETAIL joined to STREET_LOCALITY, LOCALITY, STATE and ADDRESS_DEFAULT_GEOCODE into `gnaf_address`, one normalised row per address.
+An address G-NAF marks as an alias (ALIAS_PRINCIPAL = A) is kept as one more spelling of its principal address (ADDRESS_ALIAS names the principal): a record that matches
+the alias spelling links to the principal, so the alias is never a property of its own. A row with no ALIAS_PRINCIPAL value counts as a principal.
 """
 from __future__ import annotations
 
@@ -17,9 +19,9 @@ from pathlib import Path
 import psycopg
 from psycopg import sql
 
-from .normalise import addr_from_gnaf
+from .normalise import addr_from_gnaf, gnaf_display_line
 
-TABLES = ("state", "locality", "street_locality", "address_detail", "address_default_geocode", "flat_type_aut", "street_type_aut", "level_type_aut")
+TABLES = ("state", "locality", "street_locality", "address_detail", "address_alias", "primary_secondary", "address_default_geocode", "flat_type_aut", "street_type_aut", "level_type_aut")
 _STATE_FILE = re.compile(r"^(?P<state>NSW|VIC|QLD|SA|WA|TAS|NT|ACT|OT)_(?P<table>[A-Z0-9_]+)_psv\.psv$")
 _AUTH_FILE = re.compile(r"^Authority_Code_(?P<table>[A-Z0-9_]+)_psv\.psv$")
 
@@ -98,9 +100,10 @@ def load_gnaf(conn: psycopg.Connection, directory: Path) -> LoadReport:
 
 
 _FLATTEN = """
-SELECT a.address_detail_pid, a.building_name, a.lot_number_prefix, a.lot_number, a.lot_number_suffix, a.flat_number_prefix, a.flat_number, a.flat_number_suffix,
-       a.level_number_prefix, a.level_number, a.level_number_suffix, a.number_first_prefix, a.number_first, a.number_first_suffix, a.number_last_prefix, a.number_last,
-       a.number_last_suffix, a.postcode, s.street_name, s.street_type_code, l.locality_name, st.state_abbreviation, g.longitude, g.latitude
+SELECT a.address_detail_pid, a.building_name, a.lot_number_prefix, a.lot_number, a.lot_number_suffix, a.flat_type_code, a.flat_number_prefix, a.flat_number, a.flat_number_suffix,
+       a.level_type_code, a.level_number_prefix, a.level_number, a.level_number_suffix, a.number_first_prefix, a.number_first, a.number_first_suffix, a.number_last_prefix,
+       a.number_last, a.number_last_suffix, a.postcode, a.alias_principal, s.street_name, s.street_type_code, s.street_suffix_code, l.locality_name, st.state_abbreviation,
+       g.longitude, g.latitude
 FROM address_detail a
 JOIN locality l ON l.locality_pid = a.locality_pid
 JOIN state st ON st.state_pid = l.state_pid
@@ -113,29 +116,48 @@ ORDER BY a.address_detail_pid
 
 
 def build_reference(conn: psycopg.Connection) -> dict[str, int]:
-    """Rebuild gnaf_address from the G-NAF tables. Returns {'addresses': n, 'skipped_no_street': n}. Run as the owner or an administrator."""
-    cols = ["address_detail_pid", "building_name", "lot_number_prefix", "lot_number", "lot_number_suffix", "flat_number_prefix", "flat_number", "flat_number_suffix", "level_number_prefix",
-            "level_number", "level_number_suffix", "number_first_prefix", "number_first", "number_first_suffix", "number_last_prefix", "number_last", "number_last_suffix", "postcode",
-            "street_name", "street_type_code", "locality_name", "state_abbreviation", "longitude", "latitude"]
-    done = skipped = 0
+    """Rebuild gnaf_address from the G-NAF tables. Returns {'addresses': n, 'aliases': n, 'skipped_no_street': n, 'skipped_alias_without_principal': n}.
+    Run as the owner or an administrator."""
+    cols = ["address_detail_pid", "building_name", "lot_number_prefix", "lot_number", "lot_number_suffix", "flat_type_code", "flat_number_prefix", "flat_number", "flat_number_suffix",
+            "level_type_code", "level_number_prefix", "level_number", "level_number_suffix", "number_first_prefix", "number_first", "number_first_suffix", "number_last_prefix",
+            "number_last", "number_last_suffix", "postcode", "alias_principal", "street_name", "street_type_code", "street_suffix_code", "locality_name", "state_abbreviation",
+            "longitude", "latitude"]
+    done = aliases_done = skipped = orphans = 0
     with conn.transaction():
         cur = conn.cursor()
         rows = cur.execute(_FLATTEN).fetchall()
+        principal_of = dict(cur.execute("SELECT DISTINCT ON (alias_pid) alias_pid, principal_pid FROM address_alias WHERE date_retired IS NULL ORDER BY alias_pid, address_alias_pid").fetchall())
+        kept = []
+        for r in rows:
+            row = dict(zip(cols, r))
+            addr = addr_from_gnaf(row)
+            if addr.street_name:
+                kept.append((row, addr))
+            else:
+                skipped += 1
+        principals = {row["address_detail_pid"] for row, _ in kept if row["alias_principal"] != "A"}
         cur.execute("TRUNCATE gnaf_address")
         cur.execute("CREATE TEMP TABLE ga_stage (LIKE gnaf_address, lon double precision, lat double precision) ON COMMIT DROP")
-        with cur.copy("COPY ga_stage (address_detail_pid, unit, level, building, lot, number_first, number_last, street_name, street_type, street_key, locality_key, state, postcode, canon_key, lon, lat) FROM STDIN") as cp:
-            for r in rows:
-                row = dict(zip(cols, r))
-                addr = addr_from_gnaf(row)
-                if not addr.street_name:
-                    skipped += 1
-                    continue
-                cp.write_row((row["address_detail_pid"], addr.unit, addr.level, addr.building, addr.lot, addr.number_first, addr.number_last, addr.street_name, addr.street_type,
-                              addr.street_key, addr.locality, addr.state, addr.postcode, addr.canon_key,
+        with cur.copy("COPY ga_stage (address_detail_pid, unit, level, building, lot, number_first, number_last, street_name, street_type, street_key, locality_key, state, postcode, canon_key,"
+                      " principal_pid, display_address, lon, lat) FROM STDIN") as cp:
+            for row, addr in kept:
+                pid = row["address_detail_pid"]
+                principal = None
+                if row["alias_principal"] == "A":
+                    principal = principal_of.get(pid)
+                    if principal not in principals:
+                        orphans += 1
+                        continue
+                cp.write_row((pid, addr.unit, addr.level, addr.building, addr.lot, addr.number_first, addr.number_last, addr.street_name, addr.street_type,
+                              addr.street_key, addr.locality, addr.state, addr.postcode, addr.canon_key, principal, gnaf_display_line(row),
                               None if row["longitude"] is None else float(row["longitude"]), None if row["latitude"] is None else float(row["latitude"])))
-                done += 1
-        cur.execute("""INSERT INTO gnaf_address (address_detail_pid, unit, level, building, lot, number_first, number_last, street_name, street_type, street_key, locality_key, state, postcode, canon_key, geog)
+                if principal is None:
+                    done += 1
+                else:
+                    aliases_done += 1
+        cur.execute("""INSERT INTO gnaf_address (address_detail_pid, unit, level, building, lot, number_first, number_last, street_name, street_type, street_key, locality_key, state, postcode, canon_key,
+                                                 principal_pid, display_address, geog)
                        SELECT address_detail_pid, unit, level, building, lot, number_first, number_last, street_name, street_type, street_key, locality_key, state, postcode, canon_key,
-                              CASE WHEN lon IS NULL OR lat IS NULL THEN NULL ELSE ST_SetSRID(ST_MakePoint(lon, lat), 4326)::geography END FROM ga_stage""")
+                              principal_pid, display_address, CASE WHEN lon IS NULL OR lat IS NULL THEN NULL ELSE ST_SetSRID(ST_MakePoint(lon, lat), 4326)::geography END FROM ga_stage""")
         cur.execute("ANALYZE gnaf_address")          # no-mutate: planner statistics only
-    return {"addresses": done, "skipped_no_street": skipped}
+    return {"addresses": done, "aliases": aliases_done, "skipped_no_street": skipped, "skipped_alias_without_principal": orphans}

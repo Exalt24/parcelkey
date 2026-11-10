@@ -289,3 +289,94 @@ def test_a_candidate_is_immutable():
     from parcelkey.normalise import Addr
     with pytest.raises(FrozenInstanceError):
         Candidate("P", Addr(), 1.0, True, None).pid = "x"
+
+
+# ---- second review: aliases, street suffixes, typed units, mailboxes, the display line (F1, F4, F5, F6, F10) ---------------------------------------------
+
+def test_a_record_spelled_as_an_alias_links_to_the_principal_and_is_never_a_tie_with_it(hand, conn, admin, tmp_path):
+    hand([h.addr("P1", "10"), h.addr("A1", "10", street="JONES", type="ROAD", alias_of="P1"), h.addr("A2", "10", alias_of="P1"), h.addr("P2", "20", street="JONES", type="ROAD")])
+    d = run_crm(conn, admin, tmp_path, [h.crm("C1", "10 Smith St"), h.crm("C2", "10 Jones Rd"), h.crm("C3", "20 Jones Rd")])
+    assert d["crm:C1"] == ("link", "EXACT_KEY", "P1") and d["crm:C2"] == ("link", "EXACT_KEY", "P1") and d["crm:C3"] == ("link", "EXACT_KEY", "P2")
+    assert sorted(r[0] for r in admin.execute("select gnaf_pid from property").fetchall()) == ["P1", "P2"]
+
+
+def test_a_near_miss_of_an_alias_spelling_links_to_the_principal_by_the_better_spelling(hand, conn, admin, tmp_path):
+    hand([h.addr("P1", "10", street="SMITHSON"), h.addr("A1", "10", street="HARWICK", alias_of="P1")])
+    d = run_crm(conn, admin, tmp_path, [h.crm("C1", "10 Harwik St")], cfg=MatchConfig(threshold=0.4))
+    assert d["crm:C1"] == ("link", "TRIGRAM", "P1")
+    assert admin.execute("select count(*) from property").fetchone()[0] == 1
+
+
+def test_class_a_street_suffix_is_part_of_the_street(hand, conn, admin, tmp_path):
+    """CLASS-TABLE: F5. Smith Street North and Smith Street South are two streets: a record names its own, a record that names no suffix is a tie when both streets have the number and a link
+    when only one has it, a suffix the reference writes differently is a new property and never a near miss, and a reference with no suffixes at all is the same street as any suffix."""
+    import itertools
+    rows = []
+    references = {"both": [h.addr("GN", "12", suffix="N"), h.addr("GS", "12", suffix="S")], "north only": [h.addr("GN", "12", suffix="N")], "none": [h.addr("G12", "12")]}
+    records = {"North": "12 Smith St North", "N": "12 Smith St N", "South": "12 Smith Street South", "East": "12 Smith St East", "bare": "12 Smith St"}
+    want = {
+        ("both", "North"): ("link", "EXACT_KEY", "GN"), ("both", "N"): ("link", "EXACT_KEY", "GN"), ("both", "South"): ("link", "EXACT_KEY", "GS"),
+        ("both", "East"): "NEW", ("both", "bare"): ("quarantine", "AMBIGUOUS_TIE"),
+        ("north only", "North"): ("link", "EXACT_KEY", "GN"), ("north only", "N"): ("link", "EXACT_KEY", "GN"), ("north only", "South"): "NEW",
+        ("north only", "East"): "NEW", ("north only", "bare"): ("link", "EXACT_KEY", "GN"),
+        ("none", "North"): ("link", "EXACT_KEY", "G12"), ("none", "N"): ("link", "EXACT_KEY", "G12"), ("none", "South"): ("link", "EXACT_KEY", "G12"),
+        ("none", "East"): ("link", "EXACT_KEY", "G12"), ("none", "bare"): ("link", "EXACT_KEY", "G12"),
+    }
+    for (ref_name, ref), (rec_name, text) in itertools.product(references.items(), records.items()):
+        hand(ref)
+        db.wipe(db.default_admin_dsn())
+        folder = tmp_path / f"{ref_name}-{rec_name}".replace(" ", "_")
+        folder.mkdir()
+        d = run_crm(conn, admin, folder, [h.crm("C1", text)])["crm:C1"]
+        rows.append(((ref_name, rec_name), "NEW" if d[:2] == ("link", "NEW_DERIVED") else d, want[(ref_name, rec_name)]))
+    bad = [r for r in rows if r[1] != r[2]]
+    assert not bad, bad[:5]
+
+
+def test_a_carspace_and_a_unit_with_the_same_number_are_two_properties(hand, conn, admin, tmp_path):
+    hand([h.addr("GU", "40", unit="3", flat_type="UNIT"), h.addr("GC", "40", unit="3", flat_type="CARS"), h.addr("GA", "40", unit="4", flat_type="APT"),
+          h.addr("GB", "40", unit="1", level="1", level_type="B"), h.addr("GL", "40", unit="1", level="1", level_type="L")])
+    d = run_crm(conn, admin, tmp_path, [h.crm("C1", "Carspace 3, 40 Smith St"), h.crm("C2", "Unit 3, 40 Smith St"), h.crm("C3", "Apartment 4, 40 Smith St"), h.crm("C4", "Flat 3/40 Smith St"),
+                                        h.crm("C5", "Basement 1, Unit 1, 40 Smith St"), h.crm("C6", "Level 1 Unit 1, 40 Smith St"), h.crm("C7", "Unit 1, 40 Smith St")])
+    assert (d["crm:C1"][2], d["crm:C2"][2], d["crm:C3"][2], d["crm:C4"][2]) == ("GC", "GU", "GA", "GU")
+    assert (d["crm:C5"][2], d["crm:C6"][2]) == ("GB", "GL") and d["crm:C7"] == ("quarantine", "AMBIGUOUS_TIE")          # a record with no level cannot choose between two unit 1s
+
+
+def test_class_a_mailbox_is_set_aside_with_its_own_reason_and_a_street_that_starts_with_box_is_matched(hand, conn, admin, tmp_path):
+    """CLASS-TABLE: F6. A PO Box, GPO Box, Locked Bag or Private Bag is quarantined as POSTAL_ADDRESS, never matched to a street and never made a property; Box Hill Road is a street."""
+    import itertools
+    hand([h.addr("GBX", "14", street="BOX HILL", type="ROAD", locality="BOX HILL", state="VIC", postcode="3128"), h.addr("GBS", "12", street="BOX", type="STREET"), h.addr("GFAKE", "5", street="FAKEVILLE", type="STREET")])
+    boxes = ["PO Box 5", "P.O. Box 5", "GPO Box 1234", "Locked Bag 5", "Private Bag 7"]
+    rows = []
+    records = []
+    for i, (box, layout) in enumerate(itertools.product(boxes, ("own line", "one line"))):
+        records.append(h.crm(f"M{i}", box) if layout == "own line" else h.crm(f"M{i}", f"{box} Fakeville NSW 2000", suburb="", state="", postcode=""))
+    records += [h.crm("S1", "14 Box Hill Rd", suburb="Box Hill", state="VIC", postcode="3128"), h.crm("S2", "12 Box Street")]
+    d = run_crm(conn, admin, tmp_path, records)
+    for i, (box, layout) in enumerate(itertools.product(boxes, ("own line", "one line"))):
+        rows.append(((box, layout), d[f"crm:M{i}"], ("quarantine", "POSTAL_ADDRESS")))
+    rows += [(("street", "S1"), d["crm:S1"], ("link", "EXACT_KEY", "GBX")), (("street", "S2"), d["crm:S2"], ("link", "EXACT_KEY", "GBS"))]
+    bad = [r for r in rows if r[1] != r[2]]
+    assert not bad, bad[:5]
+    assert admin.execute("select count(*) from property where origin = 'derived'").fetchone()[0] == 0
+    assert admin.execute("select detail from quarantine where record_id = 'crm:M0'").fetchone()[0] == {"why": "a PO Box, GPO Box, Locked Bag or Private Bag is a mailbox, not a property"}
+    assert admin.execute("select norm_status from source_record where record_id = 'crm:M0'").fetchone()[0] == "unparseable"
+
+
+def test_class_the_master_list_keeps_the_g_naf_spelling_for_a_g_naf_match_and_the_normalised_one_for_a_derived_row(hand, conn, admin, tmp_path):
+    """CLASS-TABLE: F10. ST KILDA stays ST KILDA for a G-NAF property; a derived property is written from the normalised parts."""
+    import itertools
+    streets = [("ST KILDA", "ROAD", "SAINT KILDA ROAD"), ("MT ELIZA", "WAY", "MOUNT ELIZA WAY"), ("SMITH", "STREET", "SMITH STREET"), ("O'CONNELL", "STREET", "OCONNELL STREET")]
+    hand([h.addr(f"G{i}", "12", street=name, type=typ, locality="ST ALBANS", state="VIC", postcode="3021") for i, (name, typ, _) in enumerate(streets)])
+    rows = []
+    texts = [f"12 {name.title().replace(chr(39), '')} {typ.title()}" for name, typ, _ in streets]
+    d = run_crm(conn, admin, tmp_path, [h.crm(f"C{i}", t, suburb="St Albans", state="VIC", postcode="3021") for i, t in enumerate(texts)]
+                + [h.crm(f"D{i}", t.replace("12", "14"), suburb="St Albans", state="VIC", postcode="3021") for i, t in enumerate(texts)])
+    for i, (name, typ, normalised) in enumerate(streets):
+        gnaf_display = admin.execute("select display_address from property where gnaf_pid = %s", (f"G{i}",)).fetchone()
+        rows.append((("G-NAF", name), gnaf_display and gnaf_display[0], f"12 {name} {typ}, ST ALBANS VIC 3021"))
+        derived = admin.execute("select display_address from property where property_id = %s", (property_id_for_derived(normalise_address(f"14 {normalised.title()}", "St Albans", "VIC", "3021").canon_key),)).fetchone()
+        rows.append((("derived", name), derived and derived[0], f"14 {normalised}, SAINT ALBANS VIC 3021"))
+    bad = [r for r in rows if r[1] != r[2]]
+    assert not bad, bad[:5]
+    assert all(v[0] == "link" for v in d.values())

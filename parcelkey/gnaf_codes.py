@@ -1,0 +1,67 @@
+"""Code lists copied from the Geoscape G-NAF Data Product Description, Appendix C, read on 2026-11-10:
+https://docs.geoscape.com.au/projects/gnaf_desc/en/stable/appendix_c.html
+
+This is data, not logic. `tests/test_gnaf_codes.py` pins how many codes each list holds, so a hand edit shows up. A real release can be newer than this page.
+"""
+from __future__ import annotations
+
+STREET_TYPES = {  # STREET_TYPE_AUT: CODE (the full word STREET_LOCALITY.STREET_TYPE_CODE holds) to the NAME column (its short spelling)
+    "ACCESS": "ACCS", "ESTATE": "EST", "POINT": "PNT", "ACRE": "ACRE", "EXPRESSWAY": "EXP", "PORT": "PORT", "AIRWALK": "AWLK", "EXTENSION": "EXTN",
+    "PRECINCT": "PREC", "ALLEY": "ALLY", "FAIRWAY": "FAWY", "PROMENADE": "PROM", "ALLEYWAY": "ALWY", "FIREBREAK": "FBRK", "PURSUIT": "PRST",
+    "AMBLE": "AMBL", "FIRELINE": "FLNE", "QUAD": "QUAD", "ANNEX": "ANNEX", "FIRETRACK": "FTRK", "QUADRANT": "QDRT", "APPROACH": "APP",
+    "FIRETRAIL": "FITR", "QUAY": "QY", "ARCADE": "ARC", "FLAT": "FLAT", "QUAYS": "QYS", "ARTERIAL": "ARTL", "FLATS": "FLTS", "RAMBLE": "RMBL",
+    "ARTERY": "ARTY", "FOLLOW": "FOLW", "RAMP": "RAMP", "AVENUE": "AV", "FOOTWAY": "FTWY", "RANGE": "RNGE", "BANAN": "BA", "FORD": "FORD",
+    "REACH": "RCH", "BANK": "BANK", "FORESHORE": "FSHR", "REEF": "REEF", "BAY": "BAY", "FORK": "FORK", "RESERVE": "RES", "BEACH": "BCH",
+    "FORMATION": "FORM", "REST": "REST", "BEND": "BEND", "FREEWAY": "FWY", "RETREAT": "RTT", "BIDI": "BIDI", "FRONT": "FRNT", "RETURN": "RTN",
+    "BOARDWALK": "BWLK", "FRONTAGE": "FRTG", "RIDE": "RIDE", "BOULEVARD": "BVD", "GAP": "GAP", "RIDGE": "RDGE", "BOULEVARDE": "BVDE", "GARDEN": "GDN",
+    "RIGHT OF WAY": "ROFW", "BOUNDARY": "BDY", "GARDENS": "GDNS", "RING": "RING", "BOWL": "BOWL", "GATE": "GTE", "RISE": "RISE", "BRACE": "BR",
+    "GATEWAY": "GWY", "RISING": "RSNG", "BRAE": "BRAE", "GLADE": "GLDE", "RIVER": "RVR", "BRANCH": "BRAN", "GLEN": "GLEN", "ROAD": "RD",
+    "BREAK": "BRK", "GRANGE": "GRA", "ROADS": "RDS", "BRETT": "BRET", "GREEN": "GRN", "ROADWAY": "RDWY", "BRIDGE": "BDGE", "GROVE": "GR",
+    "ROTARY": "RTY", "BROADWALK": "BRDWLK", "GULLY": "GLY", "ROUND": "RND", "BROADWAY": "BDWY", "HARBOUR": "HRBR", "ROUTE": "RTE", "BROW": "BROW",
+    "HAVEN": "HVN", "ROW": "ROW", "BULL": "BULL", "HEATH": "HTH", "ROWE": "ROWE", "BUSWAY": "BSWY", "HEIGHTS": "HTS", "RUE": "RUE", "BYPASS": "BYPA",
+    "HIGHROAD": "HIRD", "RUN": "RUN", "BYWAY": "BYWY", "HIGHWAY": "HWY", "SERVICEWAY": "SVWY", "CAUSEWAY": "CSWY", "HIKE": "HIKE", "SHUNT": "SHUN",
+    "CENTRE": "CTR", "HILL": "HILL", "SIDING": "SDNG", "CENTREWAY": "CNWY", "HILLS": "HILLS", "SKYLINE": "SKLN", "CHASE": "CH", "HOLLOW": "HLLW",
+    "SLOPE": "SLPE", "CIRCLE": "CIR", "HUB": "HUB", "SOUTH": "STH", "CIRCLET": "CLT", "INLET": "INLT", "SPUR": "SPUR", "CIRCUIT": "CCT",
+    "INTERCHANGE": "INTG", "SQUARE": "SQ", "CIRCUS": "CRCS", "ISLAND": "ID", "STEPS": "STPS", "CLOSE": "CL", "JUNCTION": "JNC", "STRAIGHT": "STRT",
+    "CLUSTER": "CLR", "KEY": "KEY", "STRAIT": "STAI", "COLONNADE": "CLDE", "KEYS": "KEYS", "STRAND": "STRA", "COMMON": "CMMN", "KNOLL": "KNOL",
+    "STREET": "ST", "COMMONS": "CMMNS", "LADDER": "LADR", "STRIP": "STRP", "CONCORD": "CNCD", "LANDING": "LDG", "SUBWAY": "SBWY", "CONCOURSE": "CON",
+    "LANE": "LANE", "TARN": "TARN", "CONNECTION": "CNTN", "LANEWAY": "LNWY", "TERRACE": "TCE", "CONNECTOR": "CONR", "LEAD": "LEAD",
+    "THOROUGHFARE": "THFR", "COPSE": "CPS", "LEADER": "LEDR", "THROUGHWAY": "THRU", "CORNER": "CNR", "LINE": "LINE", "TOLLWAY": "TLWY",
+    "CORSO": "CSO", "LINK": "LINK", "TOP": "TOP", "COURSE": "CRSE", "LINKWAY": "LNKWAY", "TOR": "TOR", "COURT": "CT", "LOOKOUT": "LKT",
+    "TRACK": "TRK", "COURTYARD": "CTYD", "LOOP": "LOOP", "TRAIL": "TRL", "COVE": "COVE", "LYNNE": "LYNN", "TRAMWAY": "TMWY", "CRESCENT": "CR",
+    "MALL": "MALL", "TRAVERSE": "TVSE", "CREST": "CRST", "MANOR": "MANR", "TRIANGLE": "TRIANGLE", "CRIEF": "CRF", "MART": "MART", "TRUNKWAY": "TKWY",
+    "CROOK": "CRK", "MAZE": "MZ", "TUNNEL": "TUNL", "CROSS": "CRSS", "MEAD": "MEAD", "TURN": "TURN", "CROSSING": "CRSG", "MEANDER": "MNDR",
+    "TWIST": "TWIST", "CROSSOVER": "CRVR", "MEW": "MEW", "UNDERPASS": "UPAS", "CRUISEWAY": "CUWY", "MEWS": "MEWS", "VALE": "VALE",
+    "CUL-DE-SAC": "CSAC", "MILE": "MILE", "VALLEY": "VLLY", "CUT": "CUT", "MOTORWAY": "MTWY", "VERGE": "VERGE", "CUTTING": "CUTT", "NEST": "NEST",
+    "VIADUCT": "VIAD", "DALE": "DALE", "NOOK": "NOOK", "VIEW": "VIEW", "DASH": "DASH", "NORTH": "NTH", "VIEWS": "VWS", "DELL": "DELL",
+    "OUTLET": "OTLT", "VILLA": "VLLA", "DENE": "DENE", "OUTLOOK": "OTLK", "VILLAGE": "VLGE", "DEVIATION": "DE", "OVAL": "OVAL", "VILLAS": "VLLS",
+    "DIP": "DIP", "PALMS": "PLMS", "VISTA": "VSTA", "DISTRIBUTOR": "DSTR", "PARADE": "PDE", "VUE": "VUE", "DIVIDE": "DIV", "PARADISE": "PRDS",
+    "WADE": "WADE", "DOCK": "DOCK", "PARK": "PARK", "WALK": "WALK", "DOMAIN": "DOM", "PARKWAY": "PWY", "WALKWAY": "WKWY", "DOWN": "DOWN",
+    "PART": "PART", "WATERS": "WTRS", "DOWNS": "DWNS", "PASS": "PASS", "WATERWAY": "WTWY", "DRIVE": "DR", "PASSAGE": "PSGE", "WAY": "WAY",
+    "DRIVEWAY": "DVWY", "PATH": "PATH", "WEST": "WEST", "EASEMENT": "ESMT", "PATHWAY": "PWAY", "WHARF": "WHRF", "EAST": "EAST", "PENINSULA": "PSLA",
+    "WOOD": "WD", "EDGE": "EDGE", "PERCH": "PRCH", "WOODS": "WDS", "ELBOW": "ELB", "PIAZZA": "PIAZ", "WYND": "WYND", "END": "END", "PLACE": "PL",
+    "YARD": "YARD", "ENTRANCE": "ENT", "PLAZA": "PLZA", "YARDS": "YARDS", "ESPLANADE": "ESP", "POCKET": "PKT",
+}
+
+STREET_SUFFIXES = {  # STREET_SUFFIX_AUT: CODE to NAME
+    "CN": "CENTRAL", "SE": "SOUTH EAST", "DE": "DEVIATION", "SW": "SOUTH WEST", "E": "EAST", "UP": "UPPER", "EX": "EXTENSION", "W": "WEST",
+    "LR": "LOWER", "IN": "INNER", "ML": "MALL", "OF": "OFF", "N": "NORTH", "ON": "ON", "NE": "NORTH EAST", "OP": "OVERPASS", "NW": "NORTH WEST",
+    "OT": "OUTER", "S": "SOUTH",
+}
+
+FLAT_TYPES = {  # FLAT_TYPE_AUT: CODE to NAME
+    "ANT": "ANTENNA", "CARP": "CARPARK", "LOT": "LOT", "STR": "STRATA UNIT", "APT": "APARTMENT", "CARS": "CARSPACE", "LSE": "LEASE",
+    "SUBS": "SUBSTATION", "ATM": "AUTOMATED TELLER MACHINE", "CLUB": "CLUB", "MBTH": "MARINE BERTH", "TNCY": "TENANCY", "BBQ": "BARBECUE",
+    "COOL": "COOLROOM", "MSNT": "MAISONETTE", "TNHS": "TOWNHOUSE", "BLCK": "BLOCK", "CTGE": "COTTAGE", "SE": "SUITE", "TWR": "TOWER",
+    "OFFC": "OFFICE", "DUPL": "DUPLEX", "SEC": "SECTION", "UNIT": "UNIT", "PTHS": "PENTHOUSE", "FLAT": "FLAT", "SHED": "SHED", "VLLA": "VILLA",
+    "REAR": "REAR", "FCTY": "FACTORY", "SHOP": "SHOP", "VLT": "VAULT", "ROOM": "ROOM", "GRGE": "GARAGE", "SHRM": "SHOWROOM", "WARD": "WARD",
+    "RESV": "RESERVE", "HALL": "HALL", "SIGN": "SIGN", "WHSE": "WAREHOUSE", "BTSD": "BOATSHED", "HSE": "HOUSE", "SITE": "SITE", "WKSH": "WORKSHOP",
+    "BLDG": "BUILDING", "KSK": "KIOSK", "STLL": "STALL", "BNGW": "BUNGALOW", "LBBY": "LOBBY", "STOR": "STORE", "CAGE": "CAGE", "LOFT": "LOFT",
+    "STU": "STUDIO",
+}
+
+LEVEL_TYPES = {  # LEVEL_TYPE_AUT: CODE to NAME
+    "B": "BASEMENT", "FL": "FLOOR", "G": "GROUND", "P": "PARKING", "PTHS": "PENTHOUSE", "PDM": "PODIUM", "L": "LEVEL", "LB": "LOBBY",
+    "LG": "LOWER GROUND FLOOR", "M": "MEZZANINE", "OD": "OBSERVATION DECK", "PLF": "PLATFORM", "RT": "ROOFTOP", "SB": "SUB-BASEMENT",
+    "UG": "UPPER GROUND FLOOR",
+}

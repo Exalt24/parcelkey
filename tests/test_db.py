@@ -42,7 +42,7 @@ def test_init_db_builds_everything_from_an_empty_database(scratch):
         tables = c.execute("select tablename, tableowner from pg_tables where schemaname = %s", (tag,)).fetchall()
         assert {t for t, _ in tables} >= set(db.AGENCY_TABLES) | set(db.REFERENCE_TABLES) | set(db.MASTER_TABLES) | {"schema_migration"} and {o for _, o in tables} == {owner}
         applied = c.execute(f'select name, sha256 from "{tag}".schema_migration order by name').fetchall()
-        assert [n for n, _ in applied] == [n for n, _ in db.migration_files()] and len(applied) == 3
+        assert [n for n, _ in applied] == [n for n, _ in db.migration_files()] and len(applied) == 4
         assert c.execute("select count(*) from pg_policies where schemaname = %s", (tag,)).fetchone()[0] == len(db.AGENCY_TABLES)
         assert c.execute("select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = %s and c.relforcerowsecurity", (tag,)).fetchone()[0] == len(db.AGENCY_TABLES)
 

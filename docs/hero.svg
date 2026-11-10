@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="300" viewBox="0 0 960 300" role="img" aria-labelledby="t d">
+  <title id="t">Five messy spellings of one flat become one property id</title>
+  <desc id="d">Five address lines from the CRM, listing and sales feeds of one agency, all linked by the exact key rule to one property id, pk_g_c6efe8448347210a.</desc>
+  <rect width="960" height="300" fill="#f6f8fa"/>
+  <rect x="0.5" y="0.5" width="959" height="299" fill="none" stroke="#d0d7de"/>
+  <text x="32" y="44" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="20" font-weight="600" fill="#1f2328">Five records, three feeds, one property</text>
+  <text x="32" y="68" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" fill="#59636e">What the feeds wrote (made up data, agency-a, seed 7)</text>
+  <g font-family="Consolas, Menlo, monospace" font-size="15" fill="#1f2328">
+    <text x="32" y="106" fill="#59636e">crm</text><text x="104" y="106">Apt 18 113 Dunadene Parade, QUININGMERE wa 6114</text>
+    <text x="32" y="140" fill="#59636e">crm</text><text x="104" y="140">U18/113  Dunadene Parade, QUININGMERE wa 6114</text>
+    <text x="32" y="174" fill="#59636e">crm</text><text x="104" y="174">U18/113 DUNADENE PDE, QUININGMERE wa 6114</text>
+    <text x="32" y="208" fill="#59636e">listing</text><text x="104" y="208">Flat 18, 113 Dunadene Pde, Quiningmere WA 6114</text>
+    <text x="32" y="242" fill="#59636e">sales</text><text x="104" y="242">Flat 18, 113 Dunadene Parade, Quiningmere WA 6114</text>
+  </g>
+  <path d="M600 100 L640 150 L600 236" fill="none" stroke="#8c959f" stroke-width="2"/>
+  <path d="M640 150 L688 150 M678 142 L688 150 L678 158" fill="none" stroke="#8c959f" stroke-width="2"/>
+  <rect x="700" y="96" width="228" height="108" rx="6" fill="#ffffff" stroke="#8c959f"/>
+  <text x="716" y="124" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#59636e">one master property id</text>
+  <text x="716" y="150" font-family="Consolas, Menlo, monospace" font-size="15" font-weight="700" fill="#1f2328">pk_g_c6efe8448347210a</text>
+  <text x="716" y="176" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#59636e">rule EXACT_KEY, score 1.0 on all five</text>
+  <text x="716" y="194" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#59636e">the rule is stored with each link</text>
+</svg>

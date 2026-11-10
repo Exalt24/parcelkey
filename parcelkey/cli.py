@@ -39,7 +39,8 @@ def cmd_load_gnaf(a: argparse.Namespace) -> int:
             print(f"  files for tables not modelled here, skipped: {len(report.skipped_files)} (for example {report.skipped_files[0]})")
         if not a.no_build:
             built = gnaf.build_reference(conn)
-            print(f"reference table built: {built['addresses']} addresses ({built['skipped_no_street']} without a street left out)")
+            print(f"reference table built: {built['addresses']} addresses and {built['aliases']} alias spellings "
+                  f"({built['skipped_no_street']} without a street left out, {built['skipped_alias_without_principal']} aliases without a principal left out)")
     return 0
 
 

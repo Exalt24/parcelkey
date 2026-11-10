@@ -6,6 +6,8 @@ Checks, each reported by name (exit code 1 when any fails):
   ACCOUNTED        every source record is linked or in open quarantine, never both, never neither, and none is still pending
   NO_ORPHAN        no link points at a missing record or a missing property; no quarantine row at a missing record
   ONE_ID           no property has two ids and no two properties share a G-NAF pid or a derived key; each id is the one its derivation gives
+  SUPERSEDED       a derived property this agency uses has the canonical key of a G-NAF address, because a later release added the address. It is listed and never rewritten:
+                   a derived id stays derived, and a person decides what to merge
   LINK_FIELDS      every link has a rule and a score between 0 and 1; every open quarantine row has a known reason
   CONTACTS         every record that mentions a contact is linked or set aside, every link points at a surviving contact, every identifier belongs to one surviving contact
 """
@@ -20,7 +22,7 @@ import psycopg
 from .ingest import SOURCES
 from .master import property_id_for_derived, property_id_for_gnaf
 
-QUARANTINE_REASONS = {"UNPARSEABLE", "AMBIGUOUS_TIE", "BELOW_THRESHOLD", "UNIT_CONFLICT", "LOCALITY_CONFLICT", "NUMBER_TRANSPOSED", "LOT_NO_GEOCODE", "LOT_TOO_FAR"}
+QUARANTINE_REASONS = {"UNPARSEABLE", "POSTAL_ADDRESS", "AMBIGUOUS_TIE", "BELOW_THRESHOLD", "UNIT_CONFLICT", "LOCALITY_CONFLICT", "NUMBER_TRANSPOSED", "LOT_NO_GEOCODE", "LOT_TOO_FAR"}
 
 
 @dataclass
@@ -138,6 +140,14 @@ def reconcile(cur: psycopg.Cursor, agency: str, feeds_dir: Path | None = None) -
     if dup or dup_keys:
         fail("ONE_ID", f"{dup} G-NAF pids and {dup_keys} derived keys appear on more than one property")
     res.lines.append(f"properties {len(props)} used by this agency, ids all match their derivation")
+
+    superseded = cur.execute(
+        """SELECT p.property_id, string_agg(DISTINCT coalesce(g.principal_pid, g.address_detail_pid), ', ') FROM property p JOIN gnaf_address g ON g.canon_key = p.canon_key
+           WHERE p.origin = 'derived' AND p.property_id IN (SELECT property_id FROM property_link WHERE agency_id = %s) GROUP BY p.property_id ORDER BY p.property_id""", (agency,)).fetchall()
+    if superseded:
+        listed = "; ".join(f"{property_id} is now G-NAF {gnaf_pids}" for property_id, gnaf_pids in superseded[:5])
+        fail("SUPERSEDED", f"{len(superseded)} derived properties now equal a G-NAF address ({listed}); nothing was rewritten, a person decides what to merge")
+    res.lines.append(f"superseded {len(superseded)} derived properties now equal a G-NAF address")
 
     bad_links = cur.execute("""SELECT count(*) FROM property_link WHERE agency_id = %s AND (rule = '' OR score < 0 OR score > 1)""", (agency,)).fetchone()[0]
     bad_reasons = cur.execute("SELECT count(*) FROM quarantine WHERE agency_id = %s AND status = 'open' AND NOT (reason_code = ANY(%s))", (agency, sorted(QUARANTINE_REASONS))).fetchone()[0]

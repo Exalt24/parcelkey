@@ -55,6 +55,17 @@ def run_once(seed_dir: Path, cfg: MatchConfig, *, verbose: bool) -> dict:
     return out
 
 
+def both_agencies(res: dict) -> dict:
+    """The two agencies summed: links, wrong links, precision, recall and honest recall (the policy records count as misses)."""
+    evs = [r["evaluation"] for r in res["agencies"].values()]
+    tot = {k: sum(e["totals"][k] for e in evs) for k in ("resolved", "wrong", "missed", "quarantined")}
+    made = tot["resolved"] + tot["wrong"]
+    should = sum(e["records_expected_to_link"] for e in evs)
+    policy = sum(e["records_set_aside_by_policy"] for e in evs)
+    return {**tot, "records": sum(e["records"] for e in evs), "links_made": made, "records_expected_to_link": should, "policy_records": policy,
+            "precision": tot["resolved"] / made, "recall": tot["resolved"] / should, "honest_recall": tot["resolved"] / (should + policy)}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seed-dir", default="out/seed")
@@ -63,17 +74,17 @@ def main() -> int:
     a = ap.parse_args()
     seed_dir = Path(a.seed_dir)
     if a.sweep:
-        print(f"{'threshold':>9} {'links':>6} {'wrong':>6} {'precision':>10} {'recall':>8} {'missed':>7} {'quarantined':>12}   (both agencies)")
+        print(f"{'threshold':>9} {'links':>6} {'wrong':>6} {'precision':>10} {'recall':>8} {'honest':>8} {'missed':>7} {'quarantined':>12}   (both agencies; honest = recall counting the policy records as misses)")
         for t in (float(x) for x in a.sweep.split(",")):
-            res = run_once(seed_dir, MatchConfig(threshold=t), verbose=False)
-            tot = {k: sum(r["evaluation"]["totals"][k] for r in res["agencies"].values()) for k in ("resolved", "wrong", "missed", "quarantined")}
-            made = tot["resolved"] + tot["wrong"]
-            expected = sum(r["evaluation"]["records_expected_to_link"] for r in res["agencies"].values())
-            resolved_link = sum(r["evaluation"]["recall"] * r["evaluation"]["records_expected_to_link"] for r in res["agencies"].values())
-            print(f"{t:9.2f} {made:6} {tot['wrong']:6} {tot['resolved'] / made * 100:9.2f}% {resolved_link / expected * 100:7.2f}% {tot['missed']:7} {tot['quarantined']:12}")
+            b = both_agencies(run_once(seed_dir, MatchConfig(threshold=t), verbose=False))
+            print(f"{t:9.2f} {b['links_made']:6} {b['wrong']:6} {b['precision'] * 100:9.2f}% {b['recall'] * 100:7.2f}% {b['honest_recall'] * 100:7.2f}% {b['missed']:7} {b['quarantined']:12}")
         return 0
     cfg = MatchConfig(threshold=a.threshold) if a.threshold is not None else MatchConfig()
     res = run_once(seed_dir, cfg, verbose=True)
+    b = both_agencies(res)
+    print(f"both agencies: {b['records']} records, links made {b['links_made']} (resolved {b['resolved']}, wrong {b['wrong']}), quarantined as expected {b['quarantined']}, missed {b['missed']}")
+    print(f"  precision {b['precision'] * 100:.2f}% ({b['resolved']} of {b['links_made']})   recall {b['recall'] * 100:.2f}% ({b['resolved']} of {b['records_expected_to_link']} that should link)   "
+          f"honest recall {b['honest_recall'] * 100:.2f}% ({b['resolved']} of {b['records']}, the {b['policy_records']} policy records counted as misses)")
     print(f"gnaf load {res['gnaf_load_s']:.2f} s ({res['gnaf_rows']} rows), reference build {res['reference_build_s']:.2f} s ({res['reference_rows']} addresses)")
     return 0
 

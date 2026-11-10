@@ -310,3 +310,52 @@ def test_the_accounting_messages_say_which_count_is_wrong(done):
     admin.execute("delete from property_link where record_id = 'crm:C1'")
     res = check(conn, folder)
     assert [f.detail for f in res.findings] == ["1 records are neither linked nor in open quarantine"]
+
+
+# ---- F12: a derived property that a later release now covers is reported and never rewritten --------------------------------------------------------
+
+def test_class_a_derived_property_a_release_now_covers_is_reported_and_never_rewritten(hand, conn, admin, tmp_path):
+    """CLASS-TABLE: F12. After a release adds an address, the derived property for it is listed as SUPERSEDED (also when the release adds it as an alias spelling) and nothing is rewritten;
+    a G-NAF property, a derived one the release does not cover, and another agency's reconcile are not reported."""
+    hand(REFERENCE)
+    folder = h.write_feeds(tmp_path / "feeds", crm_rows=[h.crm("C1", "12 Smith St"), h.crm("C2", "18 Smith St"), h.crm("C3", "20 Smith St"), h.crm("C4", "22 Smith St")])
+    h.run(conn, AGENCY, folder)
+    before = check(conn, folder)
+    assert before.ok and "superseded 0 derived properties now equal a G-NAF address" in before.lines
+    ids = {r[0]: r[1] for r in admin.execute("select l.record_id, l.property_id from property_link l").fetchall()}
+    snapshot_before = (admin.execute("select * from property order by property_id").fetchall(), admin.execute("select * from property_link order by record_id").fetchall())
+    hand(REFERENCE + [h.addr("G20", "20"), h.addr("A22", "22", alias_of="G14")])                                    # the "release": C3's address is a new principal, C4's an alias spelling
+    after = check(conn, folder)
+    assert names(after) == ["SUPERSEDED"] and len(after.findings) == 1
+    detail = after.findings[0].detail
+    assert detail.startswith("2 derived properties now equal a G-NAF address (")
+    assert f"{ids['crm:C3']} is now G-NAF G20" in detail and f"{ids['crm:C4']} is now G-NAF G14" in detail
+    assert ids["crm:C1"] not in detail and ids["crm:C2"] not in detail and "nothing was rewritten" in detail
+    assert "superseded 2 derived properties now equal a G-NAF address" in after.lines
+    assert (admin.execute("select * from property order by property_id").fetchall(), admin.execute("select * from property_link order by record_id").fetchall()) == snapshot_before
+    h.run(conn, AGENCY, folder)                                                                                      # a rerun decides nothing again and writes nothing
+    assert {r[0]: r[1] for r in admin.execute("select record_id, property_id from property_link").fetchall()} == ids
+    with db.agency_tx(conn, "agency-b") as cur:
+        assert reconcile(cur, "agency-b").ok
+
+
+def test_a_derived_property_only_another_agency_uses_is_not_reported_to_this_one(hand, conn, admin, tmp_path):
+    hand(REFERENCE)
+    other = h.write_feeds(tmp_path / "other", crm_rows=[h.crm("C1", "20 Smith St")])
+    h.run(conn, "agency-b", other)
+    mine = h.write_feeds(tmp_path / "mine", crm_rows=[h.crm("C1", "12 Smith St")])
+    h.run(conn, AGENCY, mine)
+    hand(REFERENCE + [h.addr("G20", "20")])
+    assert check(conn, mine).ok
+    with db.agency_tx(conn, "agency-b") as cur:
+        assert [f.check for f in reconcile(cur, "agency-b", other).findings] == ["SUPERSEDED"]
+
+
+def test_five_superseded_properties_are_listed_by_name_and_the_rest_by_count(hand, conn, admin, tmp_path):
+    hand(REFERENCE)
+    numbers = [str(n) for n in range(50, 58)]
+    folder = h.write_feeds(tmp_path / "feeds", crm_rows=[h.crm(f"C{n}", f"{n} Smith St") for n in numbers])
+    h.run(conn, AGENCY, folder)
+    hand(REFERENCE + [h.addr(f"G{n}", n) for n in numbers])
+    detail = check(conn, folder).findings[0].detail
+    assert detail.startswith("8 derived properties now equal a G-NAF address (") and detail.count(" is now G-NAF ") == 5

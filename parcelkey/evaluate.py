@@ -8,6 +8,8 @@ Per source record the outcome is one of:
 
 precision = resolved / (resolved + wrong), over every link made.
 recall    = resolved / records whose key outcome is a link.
+honest recall = resolved / every record in the key. The records whose key outcome is quarantine count as misses here. The key takes that outcome from the matcher's own policy
+(a lot with no geocode is set aside, a transposed number is set aside), so a matcher that sets them aside is not marked down by `recall` and is by this figure.
 A record the key says to set aside, that was linked anyway, counts as wrong and lowers precision.
 """
 from __future__ import annotations
@@ -42,7 +44,7 @@ def evaluate(cur: psycopg.Cursor, agency: str, key: dict[str, dict[str, str]], t
     quarantined = {r[0] for r in cur.execute("SELECT record_id FROM quarantine WHERE agency_id = %s AND status = 'open'", (agency,)).fetchall()}
     by_class: dict[str, dict[str, int]] = defaultdict(lambda: dict.fromkeys(OUTCOMES, 0) | {"unprocessed": 0})
     unit_merges = 0
-    expected_link = resolved_on_link = 0
+    expected_link = resolved_on_link = policy = 0
     for rid, k in key.items():
         outcome = "unprocessed"
         if rid in links:
@@ -59,13 +61,16 @@ def evaluate(cur: psycopg.Cursor, agency: str, key: dict[str, dict[str, str]], t
         if k["expected"] == "link":
             expected_link += 1
             resolved_on_link += outcome == "resolved"
+        else:
+            policy += 1
     totals = {o: sum(c[o] for c in by_class.values()) for o in (*OUTCOMES, "unprocessed")}
     made = totals["resolved"] + totals["wrong"]
     out = {
         "agency": agency, "records": len(key), "totals": totals, "links_made": made,
         "precision": totals["resolved"] / made if made else None,
         "recall": resolved_on_link / expected_link if expected_link else None,
-        "records_expected_to_link": expected_link, "different_unit_merges": unit_merges,
+        "honest_recall": resolved_on_link / (expected_link + policy) if expected_link + policy else None,
+        "records_expected_to_link": expected_link, "records_set_aside_by_policy": policy, "different_unit_merges": unit_merges,
         "by_class": {c: dict(v) for c, v in sorted(by_class.items())},
     }
     out["contacts"] = _evaluate_contacts(cur, agency, key)
@@ -117,6 +122,7 @@ def render(ev: dict) -> str:
     lines = [f"measurement for {ev['agency']} against the answer key: {ev['records']} records",
              f"  links made {ev['links_made']}: resolved {t['resolved']}, wrong {t['wrong']}; quarantined as expected {t['quarantined']}, missed {t['missed']}, unprocessed {t['unprocessed']}",
              f"  precision {_pct(ev['precision'])} ({t['resolved']} of {ev['links_made']})   recall {_pct(ev['recall'])} (of {ev['records_expected_to_link']} records that should link)",
+             f"  honest recall {_pct(ev['honest_recall'])} ({t['resolved']} of {ev['records']}: the {ev['records_set_aside_by_policy']} records the matcher's own policy sets aside count as misses)",
              f"  merges of two different units in one building: {ev['different_unit_merges']}",
              "", f"  {'defect class':24} {'records':>8} {'resolved':>9} {'quarantined':>12} {'missed':>7} {'wrong':>6}"]
     for cls, v in ev["by_class"].items():

@@ -7,7 +7,7 @@ import pytest
 from hypothesis import given, strategies as st
 
 from parcelkey.block import Candidate
-from parcelkey.match import Decision, MatchConfig, decide, is_transposition, locality_ok, numbers_equal, units_conflict
+from parcelkey.match import Decision, MatchConfig, decide, is_transposition, locality_ok, numbers_equal, same_street, suffix_conflict, units_conflict
 from parcelkey.normalise import Addr
 
 CFG = MatchConfig()
@@ -310,3 +310,42 @@ def test_the_nearest_distance_is_reported_to_a_tenth_of_a_metre():
 def test_the_lot_score_is_one_minus_the_share_of_the_distance_rounded_to_four_places():
     c = C("PN", A(number="23", lot="7", typ="ROAD"), dist=33.333)
     assert decide(lot_rec(), -33.8, 151.0, [c], MatchConfig(lot_distance_m=50.0)).score == 0.3333
+
+
+# ---- street suffixes: two streets that differ only in the suffix are two streets (F5) -----------------------------------------------------------------
+
+@pytest.mark.parametrize("a,b,conflict,same", [
+    ("STREET NORTH", "STREET SOUTH", True, False), ("STREET NORTH", "STREET NORTH", False, True), ("STREET NORTH", "STREET", False, True), ("STREET", "STREET NORTH", False, True),
+    ("STREET", "STREET", False, True), ("STREET NORTH EAST", "STREET EAST", True, False), ("STREET NORTH", "ROAD NORTH", False, False), ("", "", False, True), ("STREET UPPER", "STREET LOWER", True, False),
+])
+def test_suffix_conflict_and_same_street_table(a, b, conflict, same):
+    assert suffix_conflict(A(typ=a), A(typ=b)) is conflict
+    assert same_street(A(typ=a), A(typ=b)) is same
+    assert same_street(A(typ=a, street="SMYTH"), A(typ=b)) is False
+
+
+def test_a_different_suffix_never_links_even_as_a_near_miss():
+    cands = [C("PS", A(typ="STREET SOUTH"), sim=0.9)]
+    assert decide(A(typ="STREET NORTH"), None, None, cands, CFG).outcome == "new"
+    cands = [C("PN", A(street="SMYTH", typ="STREET NORTH"), sim=0.9), C("PS", A(street="SMYTH", typ="STREET SOUTH"), sim=0.88)]          # 0.02 apart is a tie, unless the suffix removes one
+    d = decide(A(typ="STREET NORTH"), None, None, cands, CFG)
+    assert (d.outcome, d.rule, d.pid) == ("link", "TRIGRAM", "PN")
+
+
+def test_a_record_with_no_suffix_is_the_same_street_as_either_and_a_tie_when_both_have_the_number():
+    both = [C("PN", A(typ="STREET NORTH"), sim=0.8), C("PS", A(typ="STREET SOUTH"), sim=0.7)]
+    d = decide(A(typ="STREET"), None, None, both, CFG)
+    assert d.outcome == "quarantine" and d.reason == "AMBIGUOUS_TIE" and {c["pid"] for c in d.detail["candidates"]} == {"PN", "PS"}
+    assert decide(A(typ="STREET"), None, None, both[:1], CFG).rule == "EXACT_KEY"
+    assert decide(A(typ="STREET NORTH"), None, None, [C("P", A(typ="STREET"))], CFG).rule == "EXACT_KEY"
+
+
+def test_the_suffix_rule_reaches_the_transposition_locality_and_lot_checks():
+    assert decide(A(number="21", typ="STREET NORTH"), None, None, [C("P", A(number="12", typ="STREET"))], CFG).reason == "NUMBER_TRANSPOSED"
+    assert decide(A(number="21", typ="STREET NORTH"), None, None, [C("P", A(number="12", typ="STREET SOUTH"))], CFG).outcome == "new"
+    other = C("P", A(locality="OTHERTON", typ="STREET"))
+    assert decide(A(typ="STREET NORTH"), None, None, [other], CFG).reason == "LOCALITY_CONFLICT"
+    assert decide(A(typ="STREET NORTH"), None, None, [C("P", A(locality="OTHERTON", typ="STREET SOUTH"))], CFG).outcome == "new"
+    lot = A(number="", lot="7", typ="ROAD NORTH")
+    assert decide(lot, None, None, [C("P", A(number="", lot="7", typ="ROAD"))], CFG).rule == "EXACT_LOT"
+    assert decide(lot, None, None, [C("P", A(number="", lot="7", typ="ROAD SOUTH"))], CFG).outcome == "new"

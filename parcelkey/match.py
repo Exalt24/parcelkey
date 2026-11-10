@@ -11,9 +11,10 @@ Order of the rules:
 
 Two hard rules sit above all of these and cannot be configured away:
   * a different unit or flat number never matches (`units_conflict`), even when the street and number are equal
+  * a different street suffix never matches (`suffix_conflict`): Smith Street North and Smith Street South are two streets. A record with no suffix is the same street as either
   * a lot only record never merges with a numbered address unless a geocode is within distance
 
-Quarantine reasons: UNPARSEABLE, AMBIGUOUS_TIE, BELOW_THRESHOLD, UNIT_CONFLICT, LOCALITY_CONFLICT, NUMBER_TRANSPOSED, LOT_NO_GEOCODE, LOT_TOO_FAR.
+Quarantine reasons: UNPARSEABLE, POSTAL_ADDRESS, AMBIGUOUS_TIE, BELOW_THRESHOLD, UNIT_CONFLICT, LOCALITY_CONFLICT, NUMBER_TRANSPOSED, LOT_NO_GEOCODE, LOT_TOO_FAR.
 """
 from __future__ import annotations
 
@@ -62,6 +63,16 @@ def units_conflict(a: Addr, b: Addr) -> bool:
     return bool(a.level and b.level and a.level != b.level)
 
 
+def suffix_conflict(a: Addr, b: Addr) -> bool:
+    """True when both addresses name a street suffix and the two differ. A feed that leaves the suffix out is not in conflict: it may mean either street."""
+    return bool(a.street_suffix and b.street_suffix and a.street_suffix != b.street_suffix)
+
+
+def same_street(a: Addr, b: Addr) -> bool:
+    """The same street: name and type equal, and the suffix equal when both write one. A feed that leaves the suffix out may mean either street, so it equals both."""
+    return a.street_base == b.street_base and not suffix_conflict(a, b)
+
+
 def locality_ok(a: Addr, b: Addr) -> bool:
     if not a.locality or not b.locality:
         return True
@@ -94,10 +105,10 @@ def decide(rec: Addr, lat: float | None, lon: float | None, cands: list[Candidat
     pool = [c for c in cands if c.sim >= cfg.floor]
     if rec.lot and not rec.number_first:
         return _decide_lot(rec, lat, lon, pool, cfg)
-    same_number = [c for c in pool if locality_ok(rec, c.addr) and numbers_equal(rec, c.addr)]
+    same_number = [c for c in pool if locality_ok(rec, c.addr) and numbers_equal(rec, c.addr) and not suffix_conflict(rec, c.addr)]
     compatible = [c for c in same_number if not units_conflict(rec, c.addr)]
     if compatible:
-        exact = [c for c in compatible if c.addr.street_key == rec.street_key]
+        exact = [c for c in compatible if same_street(rec, c.addr)]
         if len(exact) == 1:
             extra = ("POSTCODE_MISMATCH",) if rec.postcode and exact[0].addr.postcode != rec.postcode else ()
             return Decision("link", "EXACT_KEY", 1.0, exact[0].pid, rules=extra)
@@ -113,17 +124,17 @@ def decide(rec: Addr, lat: float | None, lon: float | None, cands: list[Candidat
         return _set_aside("BELOW_THRESHOLD", {"best": _cand_detail([top]), "threshold": cfg.threshold})
     if same_number:
         return _set_aside("UNIT_CONFLICT", {"record_unit": rec.unit, "candidate_units": sorted({c.addr.unit for c in same_number})})
-    other_locality = [c for c in pool if c.same_postcode and c.addr.street_key == rec.street_key and numbers_equal(rec, c.addr) and not units_conflict(rec, c.addr)]
+    other_locality = [c for c in pool if c.same_postcode and same_street(rec, c.addr) and numbers_equal(rec, c.addr) and not units_conflict(rec, c.addr)]
     if other_locality:
         return _set_aside("LOCALITY_CONFLICT", {"candidates": _cand_detail(other_locality)})
-    swapped = [c for c in pool if locality_ok(rec, c.addr) and c.addr.street_key == rec.street_key and is_transposition(rec.number_first, c.addr.number_first) and not units_conflict(rec, c.addr)]
+    swapped = [c for c in pool if locality_ok(rec, c.addr) and same_street(rec, c.addr) and is_transposition(rec.number_first, c.addr.number_first) and not units_conflict(rec, c.addr)]
     if swapped:
         return _set_aside("NUMBER_TRANSPOSED", {"candidates": _cand_detail(swapped)})
     return Decision("new", "NEW_DERIVED", 1.0)
 
 
 def _decide_lot(rec: Addr, lat: float | None, lon: float | None, pool: list[Candidate], cfg: MatchConfig) -> Decision:
-    same_lot = [c for c in pool if c.addr.lot == rec.lot and locality_ok(rec, c.addr) and c.addr.street_key == rec.street_key]
+    same_lot = [c for c in pool if c.addr.lot == rec.lot and locality_ok(rec, c.addr) and same_street(rec, c.addr)]
     lot_only = [c for c in same_lot if not c.addr.number_first and not c.addr.unit]
     numbered = [c for c in same_lot if c.addr.number_first]
     if lot_only:
@@ -171,7 +182,7 @@ def match_pending(cur: psycopg.Cursor, agency: str, cfg: MatchConfig = MatchConf
             addr = Addr(unit=row[3], level=row[4], building=row[5], lot=row[6], number_first=row[7], number_last=row[8], street_name=row[9], street_type=row[10],
                         locality=row[11], state=row[12], postcode=row[13])
             lat, lon = row[14], row[15]
-            dec = decide(addr, lat, lon, cands.get(record_id, []), cfg) if status == "ok" else _set_aside("UNPARSEABLE", {"why": "normalise could not read a street and number"})
+            dec = decide(addr, lat, lon, cands.get(record_id, []), cfg) if status == "ok" else _unusable(norm_rules)
             counts.records += 1
             if dec.outcome == "quarantine":
                 _quarantine(cur, agency, record_id, dec)
@@ -187,6 +198,13 @@ def match_pending(cur: psycopg.Cursor, agency: str, cfg: MatchConfig = MatchConf
             cur.execute("""UPDATE quarantine SET status = 'resolved', resolved_at = now() WHERE agency_id = %s AND record_id = %s AND status = 'open'""", (agency, record_id))
             counts.linked[dec.rule] = counts.linked.get(dec.rule, 0) + 1
     return counts
+
+
+def _unusable(norm_rules: list[str]) -> Decision:
+    """The decision for a record that normalise could not turn into a street address: a mailbox is named as one, anything else is unparseable."""
+    if "POSTAL_ADDRESS" in norm_rules:
+        return _set_aside("POSTAL_ADDRESS", {"why": "a PO Box, GPO Box, Locked Bag or Private Bag is a mailbox, not a property"})
+    return _set_aside("UNPARSEABLE", {"why": "normalise could not read a street and number"})
 
 
 def _quarantine(cur: psycopg.Cursor, agency: str, record_id: str, dec: Decision) -> None:

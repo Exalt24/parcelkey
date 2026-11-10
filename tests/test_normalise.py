@@ -1,11 +1,15 @@
 """Normalisation: every spelling of a unit, a street type, a state, a lot and a phone, with the rules that must fire for each."""
 from __future__ import annotations
 
+import itertools
+
 import pytest
 from hypothesis import given, strategies as st
 
-from parcelkey.normalise import (LEVEL_MARKERS, STATE_NAMES, STATES, STREET_TYPE_SPELLINGS, UNIT_MARKERS, Addr, addr_from_gnaf, canonical_street_type, normalise_address, normalise_email, normalise_name,
-                                 normalise_phone)
+from parcelkey.gnaf_codes import FLAT_TYPES, LEVEL_TYPES, STREET_SUFFIXES, STREET_TYPES
+from parcelkey.match import units_conflict
+from parcelkey.normalise import (DISTINCT_FLAT_TYPES, LEVEL_MARKERS, OTHER_FLAT_WORDS, OTHER_LEVEL_WORDS, STATE_NAMES, STATES, STREET_SUFFIX_WORDS, STREET_TYPE_SPELLINGS, UNIT_MARKERS, Addr,
+                                 addr_from_gnaf, canonical_street_type, common_street_type, gnaf_display_line, gnaf_part, normalise_address, normalise_email, normalise_name, normalise_phone)
 
 FAKE = ("Fakeville", "NSW", "2000")
 
@@ -420,3 +424,255 @@ def test_a_foreign_number_is_not_read_as_an_australian_one():
 def test_a_unit_written_with_only_a_letter_is_not_read_as_a_unit():
     a = normalise_address("Tower Unit G 12 Smith St", *FAKE)
     assert (a.building, a.unit, a.number_first) == ("TOWER UNIT G", "", "12")
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------
+# classes from the second review (F4 to F9). Each CLASS-TABLE test builds its rows by code, and every table holds the harmful input now handled AND the ordinary input it must not break.
+
+def gnaf_row(**kw):
+    row = dict(street_name="SMITH", street_type_code="STREET", locality_name="FAKEVILLE", state_abbreviation="NSW", postcode="2000", number_first=40)
+    row.update(kw)
+    return row
+
+
+def assert_table(rows):
+    """rows are (label, got, want); every mismatch is listed at once."""
+    bad = [r for r in rows if r[1] != r[2]]
+    assert not bad, f"{len(bad)} of {len(rows)} rows differ, first: {bad[:5]}"
+
+
+def ordinal(n):
+    return f"{n}{'th' if n % 100 in (11, 12, 13) else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
+COMPASS = ("N", "S", "E", "W", "NE", "NW", "SE", "SW")
+
+
+def test_class_flat_and_level_types_keep_what_tells_two_spaces_apart():
+    """CLASS-TABLE: F4. A carspace 3 is not unit 3 and basement 1 is not level 1; apartment 3, flat 3 and suite 3 are still unit 3."""
+    rows = []
+    for code, ident in itertools.product(sorted(FLAT_TYPES), ("3", "12")):
+        want = f"{code} {ident}" if code in DISTINCT_FLAT_TYPES else ident
+        rows.append((("flat code", code, ident), addr_from_gnaf(gnaf_row(flat_type_code=code, flat_number=ident)).unit, want))
+        rows.append((("flat name", code, ident), addr_from_gnaf(gnaf_row(flat_type_code=FLAT_TYPES[code].lower(), flat_number=ident)).unit, want))
+    for code, ident in itertools.product(sorted(LEVEL_TYPES), ("1", "")):
+        want = ident if code in ("L", "FL") else f"{code} {ident}".strip()
+        rows.append((("level code", code, ident), addr_from_gnaf(gnaf_row(level_type_code=code, level_number=ident or None)).level, want))
+        rows.append((("level name", code, ident), addr_from_gnaf(gnaf_row(level_type_code=LEVEL_TYPES[code], level_number=ident or None)).level, want))
+    for word, ident in itertools.product(sorted(OTHER_FLAT_WORDS), ("3", "03")):
+        a = normalise_address(f"{word.title()} {ident}, 40 Smith St", *FAKE)
+        rows.append((("source word", word, ident), (a.unit, a.number_first), (f"{OTHER_FLAT_WORDS[word]} 3", "40")))
+        rows.append((("source meets G-NAF", word, ident), a.unit, addr_from_gnaf(gnaf_row(flat_type_code=OTHER_FLAT_WORDS[word], flat_number=3)).unit))
+    for word, ident in itertools.product(sorted(OTHER_LEVEL_WORDS), ("1", "01")):
+        a = normalise_address(f"{word.title()} {ident}, 40 Smith St", *FAKE)
+        rows.append((("source level word", word, ident), (a.level, a.unit), (f"{OTHER_LEVEL_WORDS[word]} 1", "")))
+        rows.append((("source meets G-NAF", word, ident), a.level, addr_from_gnaf(gnaf_row(level_type_code=OTHER_LEVEL_WORDS[word], level_number=1)).level))
+    # the ordinary inputs: every unit word reads as the bare unit and meets every ordinary flat type; every level word reads as the bare level
+    for marker, code in itertools.product(sorted(UNIT_MARKERS), sorted(FLAT_TYPES)):
+        got = normalise_address(f"{marker.title()} 3, 40 Smith St", *FAKE).unit == addr_from_gnaf(gnaf_row(flat_type_code=code, flat_number=3)).unit
+        rows.append((("ordinary unit word meets flat type", marker, code), got, code not in DISTINCT_FLAT_TYPES))
+    for marker, ident in itertools.product(sorted(LEVEL_MARKERS), ("1", "01")):
+        rows.append((("ordinary level word", marker, ident), normalise_address(f"{marker.title()} {ident}, 40 Smith St", *FAKE).level, "1"))
+    for code in ("L", "FL"):
+        rows.append((("ordinary level type", code), addr_from_gnaf(gnaf_row(level_type_code=code, level_number=1)).level, "1"))
+    assert_table(rows)
+    assert units_conflict(normalise_address("Unit 3, 40 Smith St", *FAKE), normalise_address("Carspace 3, 40 Smith St", *FAKE))
+    assert not units_conflict(normalise_address("Apt 3, 40 Smith St", *FAKE), normalise_address("Flat 3, 40 Smith St", *FAKE))
+    assert normalise_address("Basement 1, 40 Smith St", *FAKE).canon_key != normalise_address("Level 1, 40 Smith St", *FAKE).canon_key
+
+
+def test_every_distinct_flat_type_and_every_word_is_a_real_g_naf_code():
+    assert DISTINCT_FLAT_TYPES <= set(FLAT_TYPES) and set(OTHER_FLAT_WORDS.values()) <= DISTINCT_FLAT_TYPES
+    assert set(OTHER_LEVEL_WORDS.values()) <= set(LEVEL_TYPES) - {"L", "FL"}
+    for word, code in OTHER_FLAT_WORDS.items():
+        assert FLAT_TYPES[code] == word
+    for word, code in OTHER_LEVEL_WORDS.items():
+        assert LEVEL_TYPES[code] == word
+
+
+def test_class_street_suffix_is_kept_and_a_street_called_east_is_not_a_suffix():
+    """CLASS-TABLE: F5. `12 Smith St North` is Smith Street with the suffix North, not a street called Smith Saint North; a street named East or a St Kilda Road is untouched."""
+    rows = []
+    types = [("St", "STREET"), ("Street", "STREET"), ("Rd", "ROAD"), ("Road", "ROAD"), ("Ave", "AVENUE"), ("Pde", "PARADE"), ("Gdns", "GARDENS")]
+    suffixes = [(name.title(), name) for name in sorted(STREET_SUFFIXES.values())] + [(code, STREET_SUFFIXES[code]) for code in COMPASS]
+    for (t, t_code), (s_text, s_name) in itertools.product(types, suffixes):
+        a = normalise_address(f"12 Smith {t} {s_text}", *FAKE)
+        rows.append((("source", t, s_text), (a.street_name, a.street_type, a.street_suffix), ("SMITH", f"{t_code} {s_name}", s_name)))
+        rows.append((("line reads back", t, s_text), normalise_address(a.line()).street_key, a.street_key))
+    for code, name in STREET_SUFFIXES.items():
+        from_g_naf = addr_from_gnaf(gnaf_row(street_suffix_code=code))
+        rows.append((("G-NAF", code), (from_g_naf.street_type, from_g_naf.street_suffix), (f"STREET {name}", name)))
+        rows.append((("G-NAF meets source", code), from_g_naf.street_key, normalise_address(f"40 Smith St {name}", *FAKE).street_key))
+    for text, name, typ, suffix in [("12 St Kilda Rd", "SAINT KILDA", "ROAD", ""), ("12 Smith St", "SMITH", "STREET", ""), ("12 East St", "EAST", "STREET", ""), ("5 North Rd", "NORTH", "ROAD", ""),
+                                    ("5 West End Rd", "WEST END", "ROAD", ""), ("5 Smith North", "SMITH", "NORTH", "NORTH")]:
+        a = normalise_address(text, *FAKE)
+        rows.append((("ordinary", text), (a.street_name, a.street_type, a.street_suffix), (name, typ, suffix)))
+    assert_table(rows)
+    north, south, bare = (normalise_address(f"12 Smith St {x}", *FAKE) for x in ("North", "South", ""))
+    assert len({north.canon_key, south.canon_key, bare.canon_key}) == 3
+
+
+def test_street_suffix_property_takes_the_longest_name():
+    assert Addr(street_type="STREET NORTH EAST").street_suffix == "NORTH EAST"
+    assert Addr(street_type="STREET EAST").street_suffix == "EAST"
+    assert Addr(street_type="ROAD").street_suffix == "" and Addr(street_type="").street_suffix == "" and Addr(street_type="NORTH").street_suffix == "NORTH"
+    assert Addr(street_type="STREET UPPER").street_suffix == "UPPER" and Addr(street_type="LOWER").street_suffix == "LOWER"
+
+
+def test_class_postal_addresses_are_set_aside_and_boxes_that_are_streets_are_not():
+    """CLASS-TABLE: F6. A PO Box, GPO Box, Locked Bag or Private Bag is a mailbox. A street called Box Hill Road or Box Street is a street."""
+    rows = []
+    boxes = ["PO Box 5", "P.O. Box 5", "P O Box 5", "PO BOX 5", "po box 5", "Po Box 5", "GPO Box 1234", "G.P.O. Box 1234", "gpo box 9", "Locked Bag 5", "LOCKED BAG 5", "Private Bag 7", "private bag 7"]
+    layouts = {
+        "own line": lambda b: (b, "Fakeville", "NSW", "2000"),
+        "one line": lambda b: (f"{b} Fakeville NSW 2000", None, None, None),
+        "comma": lambda b: (f"{b}, Fakeville NSW 2000", None, None, None),
+        "after a street": lambda b: (f"12 Smith St, {b}", "Fakeville", "NSW", "2000"),
+    }
+    for box, (layout, build) in itertools.product(boxes, layouts.items()):
+        a = normalise_address(*build(box))
+        rows.append((("postal", box, layout), ("POSTAL_ADDRESS" in a.rules, a.street_name, a.number_first), (True, "", "")))
+    streets = ["14 Box Hill Rd", "12 Box Street", "3 Boxwood Ave", "9 Gpo Lane", "8 Private Road", "7 Locked Gate Rd", "6 Bagot Rd", "5 Po Valley Dr", "2 Post Office Lane"]
+    for street, layout in itertools.product(streets, ("fields", "one line")):
+        a = normalise_address(street, "Box Hill", "VIC", "3128") if layout == "fields" else normalise_address(f"{street}, Box Hill VIC 3128")
+        rows.append((("street", street, layout), ("POSTAL_ADDRESS" in a.rules, bool(a.street_name), bool(a.number_first)), (False, True, True)))
+    assert_table(rows)
+
+
+def test_a_postal_address_has_no_street_and_no_other_part():
+    a = normalise_address("PO Box 5 Fakeville NSW 2000")
+    assert "POSTAL_ADDRESS" in a.rules and a == Addr() and a.canon_key == "||||||"
+
+
+def test_class_unit_and_level_forms_prefixes_zeros_and_floor_words():
+    """CLASS-TABLE: F7. G01/12 is unit G1 of number 12, L3/12 is level 3 of number 12, 01/12 is unit 1, Ground Floor is level G and 3rd Floor is level 3; the plain forms are unchanged."""
+    rows = []
+    for prefix, (raw, clean) in itertools.product(("", "G", "A", "LG"), (("1", "1"), ("01", "1"), ("001", "1"), ("10", "10"), ("010", "10"), ("05A", "5A"), ("0", "0"), ("00", "0"))):
+        a = normalise_address(f"{prefix}{raw}/12 Smith St", *FAKE)
+        rows.append((("slash", prefix, raw), (a.unit, a.level, a.number_first, a.street_name), (prefix + clean, "", "12", "SMITH")))
+        rows.append((("slash fires", prefix, raw), ("UNIT_SLASH_FORM" in a.rules, "UNIT_PREFIX_FORM" in a.rules, "LEADING_ZERO_DROPPED" in a.rules), (True, bool(prefix), clean != raw)))
+        for marker in ("Unit", "Apt", "Flat", "Shop"):
+            b = normalise_address(f"{marker} {prefix}{raw}, 12 Smith St", *FAKE)
+            rows.append((("marker", marker, prefix, raw), (b.unit, b.number_first), (prefix + clean, "12")))
+        c = normalise_address(f"{prefix}{raw}/12-14 Smith St", *FAKE)
+        rows.append((("slash range", prefix, raw), (c.unit, c.number_key), (prefix + clean, "12-14")))
+    for raw, clean in (("3", "3"), ("03", "3"), ("10", "10"), ("3A", "3A")):
+        a = normalise_address(f"L{raw}/12 Smith St", *FAKE)
+        rows.append((("level prefix", raw), (a.level, a.unit, a.number_first, "LEVEL_PREFIX_FORM" in a.rules), (clean, "", "12", True)))
+    for raw, clean in (("3", "3"), ("03", "3"), ("12", "12"), ("012", "12")):
+        for marker in ("Level", "Floor", "Lvl", "L", "Flr"):
+            a = normalise_address(f"{marker} {raw}, 12 Smith St", *FAKE)
+            rows.append((("level word", marker, raw), a.level, clean))
+    for words in ("Ground Floor", "GROUND FLOOR", "Ground Level", "Ground Flr", "ground lvl"):
+        for layout in (f"{words}, 12 Smith St", f"{words} 12 Smith St", f"Unit 5, {words}, 12 Smith St"):
+            a = normalise_address(layout, *FAKE)
+            rows.append((("ground", layout), (a.level, a.number_first, a.building), ("G", "12", "")))
+    for n, word in itertools.product((1, 2, 3, 4, 5, 11, 12, 13, 21, 22, 23, 101), ("Floor", "Level", "Flr", "Lvl")):
+        a = normalise_address(f"{ordinal(n)} {word}, 12 Smith St", *FAKE)
+        rows.append((("ordinal", ordinal(n), word), (a.level, a.number_first, a.building, "FLOOR_WORDS_READ" in a.rules), (str(n), "12", "", True)))
+    for text, want in [("3/12 Smith St", ("3", "", "12")), ("Unit 3, 12 Smith St", ("3", "", "12")), ("Level 3, 12 Smith St", ("", "3", "12")), ("12 Smith St", ("", "", "12")),
+                       ("5A/12 Smith St", ("5A", "", "12")), ("Lot 7 Smith Rd", ("", "", "")), ("12 1st Ave", ("", "", "12"))]:
+        a = normalise_address(text, *FAKE)
+        rows.append((("ordinary", text), (a.unit, a.level, a.number_first), want))
+    assert_table(rows)
+    plain = normalise_address("12 Smith St", *FAKE)
+    assert not {"LEADING_ZERO_DROPPED", "UNIT_PREFIX_FORM", "LEVEL_PREFIX_FORM", "FLOOR_WORDS_READ", "FLAT_TYPE_KEPT", "LEVEL_TYPE_KEPT", "STREET_SUFFIX_KEPT"} & set(plain.rules)
+
+
+def test_a_unit_key_reads_back_from_its_own_line():
+    for text in ("G01/12 Smith St", "L3/12 Smith St", "Carspace 12, 40 Smith St", "Basement 1, 40 Smith St", "Garage 4/40 Smith St", "Unit 5, Level 3, 12 Smith St", "Ground Floor, 12 Smith St",
+                 "Mezzanine 2, Unit 5, 12 Smith St", "Store 7, 12 Smith St North"):
+        a = normalise_address(text, *FAKE)
+        assert normalise_address(a.line()) == a, (text, a.line())
+    assert Addr(unit="SHED 3", number_first="1", street_name="X").line().startswith("SHED 3 1 X")
+    assert Addr(level="LG 2", number_first="1", street_name="X").line().startswith("LOWER GROUND FLOOR 2 1 X")
+    assert Addr(unit="CARS 3", number_first="1", street_name="X").line().startswith("CARSPACE 3 1 X")
+
+
+def test_class_street_types_cover_everything_g_naf_lists_and_the_common_ones_still_split_a_line():
+    """CLASS-TABLE: F8. All 275 STREET_TYPE_AUT types are read by code or short name; a suburb that ends in a street type word (Bondi Beach) or starts with one (Park Orchards) still splits off."""
+    rows = []
+    assert len(STREET_TYPES) == 275
+    for (code, short), kind in itertools.product(sorted(STREET_TYPES.items()), ("code", "short", "short title")):
+        if kind == "code" and (" " in code or "-" in code):
+            continue
+        word = {"code": code, "short": short, "short title": short.title()}[kind]
+        a = normalise_address(f"5 Park {word}", *FAKE)
+        rows.append((("type", code, kind), (a.street_name, a.street_type), ("PARK", code)))
+        rows.append((("type word", code, kind), (canonical_street_type(word), bool(common_street_type(word))), (code, word.upper() in STREET_TYPE_SPELLINGS)))
+    for spelling, code in sorted(STREET_TYPE_SPELLINGS.items()):
+        rows.append((("common", spelling), (canonical_street_type(spelling), common_street_type(spelling)), (code, code)))
+    for text, want in [
+        ("12 Smith St, Bondi Beach", ("SMITH", "STREET", "BONDI BEACH")),
+        ("12 Smith St, Palm Beach NSW 2108", ("SMITH", "STREET", "PALM BEACH")),
+        ("12 Ocean Beach Rd Bondi NSW 2000", ("OCEAN BEACH", "ROAD", "BONDI")),
+        ("12 Smith St Park Orchards VIC 3114", ("SMITH", "STREET", "PARK ORCHARDS")),
+        ("88 Surfers Paradise Blvd, Surfers Paradise QLD 4217", ("SURFERS PARADISE", "BOULEVARD", "SURFERS PARADISE")),
+        ("5 Park Gdns Fakeville NSW 2000", ("PARK", "GARDENS", "FAKEVILLE")),
+        ("9 Hill Hts, Fakeville NSW 2000", ("HILL", "HEIGHTS", "FAKEVILLE")),
+        ("12 Smith St, Sunnybank Hills QLD 4109", ("SMITH", "STREET", "SUNNYBANK HILLS")),
+        ("12 Smith Street Bondi Beach NSW 2026", ("SMITH", "STREET", "BONDI BEACH")),
+    ]:
+        a = normalise_address(text)
+        rows.append((("line", text), (a.street_name, a.street_type, a.locality), want))
+    assert_table(rows)
+
+
+def test_a_street_type_only_g_naf_lists_splits_a_line_only_when_no_common_type_does():
+    assert normalise_address("5 Park Gdns Fakeville NSW 2000").locality == "FAKEVILLE"
+    mixed = normalise_address("5 Park Gdns Smith St Fakeville NSW 2000")          # the common type ends the street first
+    assert (mixed.street_name, mixed.street_type, mixed.locality) == ("PARK GDNS SMITH", "STREET", "FAKEVILLE")
+    assert normalise_address("5 Park Gdns").street_type == "GARDENS"
+
+
+def test_class_postcode_and_state_forms_nt_leading_zero_and_other_territories():
+    """CLASS-TABLE: F9. NT postcode 800 is 0800 and OT is a state; the same short postcode in any other state is still dropped."""
+    rows = []
+    for state, pc in itertools.product(("NT", "nt", "Northern Territory"), ("800", "0800", "880", "08000", "80", "abc")):
+        a = normalise_address("12 Smith St", "Darwin", state, pc)
+        want = {"800": "0800", "880": "0880", "0800": "0800"}.get(pc, "")
+        rows.append((("fields", state, pc), (a.postcode, a.state, "POSTCODE_ZERO_RESTORED" in a.rules, "POSTCODE_BAD_SHAPE" in a.rules),
+                     (want, "NT", pc in ("800", "880"), pc in ("08000", "80", "abc"))))
+    for state, pc in itertools.product(("NSW", "VIC", "QLD", "SA", "WA", "TAS", "ACT", "", None), ("800", "200")):
+        a = normalise_address("12 Smith St", "Fakeville", state, pc)
+        rows.append((("other state", state, pc), (a.postcode, "POSTCODE_ZERO_RESTORED" in a.rules, "POSTCODE_BAD_SHAPE" in a.rules), ("", False, True)))
+    for state, pc in itertools.product(("NT", "nt", "Northern Territory"), ("800", "0800", "20000")):
+        a = normalise_address(f"12 Smith St, Darwin {state} {pc}")
+        rows.append((("one line", state, pc), (a.postcode, a.state), ({"800": "0800", "0800": "0800"}.get(pc, ""), "NT")))
+        b = normalise_address(f"12 Smith St Darwin {state} {pc}")
+        rows.append((("one line no comma", state, pc), (b.postcode, b.state, b.locality), ({"800": "0800", "0800": "0800"}.get(pc, ""), "NT", "DARWIN")))
+    for state, pc in itertools.product(("OT", "ot", "Other Territories"), ("2899", "6798", "6799")):
+        a = normalise_address("12 Smith St", "Norfolk Island", state, pc)
+        rows.append((("OT fields", state, pc), (a.state, a.postcode), ("OT", pc)))
+        b = normalise_address(f"12 Smith St, Norfolk Island {state} {pc}")
+        rows.append((("OT line", state, pc), (b.state, b.postcode), ("OT", pc)))
+    for state in ("XX", "Narnia", "OTT", "N"):
+        rows.append((("not a state", state), normalise_address("12 Smith St", "Fakeville", state, "2000").state, ""))
+    for state, pc in itertools.product(STATES, ("2000", "3000")):
+        a = normalise_address("12 Smith St", "Fakeville", state, pc)
+        rows.append((("ordinary", state, pc), (a.state, a.postcode, "POSTCODE_ZERO_RESTORED" in a.rules), (state, pc, False)))
+    assert_table(rows)
+
+
+def test_gnaf_part_and_display_line_keep_the_g_naf_spelling():
+    assert gnaf_part("G", 1, "A") == "G1A" and gnaf_part(None, None, None) == "" and gnaf_part("", "", "") == "" and gnaf_part(None, 12, None) == "12"
+    row = gnaf_row(street_name="ST KILDA", street_type_code="ROAD", locality_name="ST KILDA", state_abbreviation="VIC", postcode="3182", number_first=12, number_last=14,
+                   flat_type_code="APT", flat_number=5, flat_number_suffix="A", level_type_code="B", level_number=1, building_name="Skyline Tower")
+    assert gnaf_display_line(row) == "SKYLINE TOWER, BASEMENT 1 APARTMENT 5A 12-14 ST KILDA ROAD, ST KILDA VIC 3182"
+    assert gnaf_display_line(gnaf_row()) == "40 SMITH STREET, FAKEVILLE NSW 2000"
+    assert gnaf_display_line(gnaf_row(level_number=3, flat_number=2, number_first=None, lot_number="7")) == "LEVEL 3 UNIT 2 LOT 7 SMITH STREET, FAKEVILLE NSW 2000"
+    assert gnaf_display_line(gnaf_row(level_type_code="G", street_suffix_code="N")) == "GROUND 40 SMITH STREET NORTH, FAKEVILLE NSW 2000"
+    assert gnaf_display_line(gnaf_row(level_type_code="FL", level_number=2, flat_type_code="CARS", flat_number=9)) == "FLOOR 2 CARSPACE 9 40 SMITH STREET, FAKEVILLE NSW 2000"
+    assert gnaf_display_line(gnaf_row(street_suffix_code="ZZ", locality_name="", postcode=None)) == "40 SMITH STREET ZZ, NSW"
+    assert gnaf_display_line({}) == ""
+
+
+def test_a_type_code_g_naf_does_not_list_is_kept_as_it_is():
+    assert addr_from_gnaf(gnaf_row(street_type_code="ZZTOP")).street_type == "ZZTOP"
+    assert addr_from_gnaf(gnaf_row(street_type_code="")).street_type == "" and addr_from_gnaf(gnaf_row(street_type_code=None)).street_type == ""
+
+
+def test_the_rules_for_a_kept_type_or_suffix_fire_only_when_one_was_kept():
+    for text, rule in (("Carspace 12, 40 Smith St", "FLAT_TYPE_KEPT"), ("Basement 1, 40 Smith St", "LEVEL_TYPE_KEPT"), ("12 Smith St North", "STREET_SUFFIX_KEPT")):
+        assert rule in normalise_address(text, *FAKE).rules
+        assert rule not in normalise_address(text.replace("Carspace", "Unit").replace("Basement", "Level").replace(" North", ""), *FAKE).rules

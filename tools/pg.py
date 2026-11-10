@@ -20,8 +20,14 @@ ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 VARS = ("PARCELKEY_ADMIN_PASSWORD", "PARCELKEY_OWNER_PASSWORD", "PARCELKEY_APP_PASSWORD")
 
 
-def _docker(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["docker", *args], capture_output=True, text=True, timeout=180)
+PULL_TIMEOUT = 1800          # seconds; the first run downloads the image, which can take a while on a slow link
+
+
+def _docker(*args: str, timeout: float = 180) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        raise SystemExit("docker was not found on PATH. Install Docker, start it, and run this again.") from None
 
 
 def _read_env() -> dict[str, str]:
@@ -51,6 +57,11 @@ def up(timeout: float = 120.0) -> None:
         _docker("rm", "-f", "-v", NAME)                  # a container whose password this checkout does not know is replaced
         state = _docker("inspect", "-f", "{{.State.Running}}", NAME)
     if state.returncode != 0:
+        if _docker("image", "inspect", IMAGE).returncode != 0:
+            print(f"pulling {IMAGE} (first run only, it can take a few minutes)", flush=True)
+            pull = _docker("pull", IMAGE, timeout=PULL_TIMEOUT)
+            if pull.returncode != 0:
+                raise SystemExit(f"docker pull failed: {pull.stderr.strip()}")
         run = _docker("run", "-d", "--name", NAME, "-e", f"POSTGRES_PASSWORD={env['PARCELKEY_ADMIN_PASSWORD']}", "-e", "POSTGRES_DB=parcelkey", "-p", f"{PORT}:5432", IMAGE)
         if run.returncode != 0:
             raise SystemExit(f"docker run failed: {run.stderr.strip()}")

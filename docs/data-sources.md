@@ -14,6 +14,8 @@ No data from CoreLogic, Domain, REA, Pricefinder or any other licensed property 
 | Open G-NAF is released on data.gov.au as pipe separated value files with the extension `.psv` | Data Product Description, section 9, https://docs.geoscape.com.au/projects/gnaf_desc/en/stable/data_product_delivery.html |
 | A release has an `Authority Code` folder (15 lookup tables, such as street types) and a `Standard` folder with 16 tables per state or territory; files are named `ACT_ADDRESS_DETAIL_psv.psv` and `Authority_Code_FLAT_TYPE_AUT_psv.psv`; the delimiter is `\|`; the import dialog in the guide has the header row ticked | Geoscape "Unpacking GNAF" quick reference guide, https://geoscape.com.au/wp-content/uploads/2025/07/Unpacking-GNAF.pdf |
 | Street type values in the guide's sample view are full words in capitals (CRESCENT, STREET, AVENUE, CIRCUIT, COURT, DRIVE, PLACE) | same guide, last page |
+| The code lists in `parcelkey/gnaf_codes.py`: STREET_TYPE_AUT (275 types, each with its short name), STREET_SUFFIX_AUT (19), FLAT_TYPE_AUT (53) and LEVEL_TYPE_AUT (15). Read on 2026-11-10 with a fetch tool and again by parsing the page's HTML tables; both gave the same counts | Appendix C, https://docs.geoscape.com.au/projects/gnaf_desc/en/stable/appendix_c.html |
+| ALIAS_PRINCIPAL is `A = Alias record, P = Principal record`; ADDRESS_ALIAS has PRINCIPAL_PID and ALIAS_PID (both ADDRESS_DETAIL_PID); PRIMARY_SECONDARY is `P (Primary) or S (secondary)`, a secondary address is any address where flat number or level number information is not null, and the PRIMARY_SECONDARY table links a primary to its secondary addresses with PS_JOIN_TYPE_CODE 1 or 2 | same page |
 | G-NAF is published quarterly; the data.gov.au page lists an August 2026 release | https://data.gov.au/data/dataset/19432f89-dc3a-4ef3-b943-5326ef1dbecc (read in a real browser; a plain fetch returned 403) |
 
 ## Licence and attribution
@@ -30,7 +32,8 @@ What that means here: this repository contains no G-NAF content, so no attributi
 
 ## What was not confirmed
 
-- The values of FLAT_TYPE_AUT and LEVEL_TYPE_AUT were not on any page loaded. The generator uses UNIT, APARTMENT, FLAT, SUITE and VILLA for flats and `L` for a level. The loader does not depend on them.
+- The generator writes the flat types UNIT, APT, FLAT, SE and VLLA and the level type `L`, which are codes on the Appendix C page. It writes no alias, no carspace and no basement, so those paths are tested on hand written rows and not on the generated world. The page lists 275 street types; a review once counted 298, a figure this page does not support.
+- Which release the Appendix C page describes is not stated on the page, and a real release can carry codes it does not list.
 - The geocode type code `PC` and the LEVEL_GEOCODED_CODE value 7 in generated rows are placeholders. The loader does not read either.
 - Whether current real files carry a GEOMETRY column in ADDRESS_DEFAULT_GEOCODE is not settled by the pages loaded. The loader matches columns by header name, skips a column the tables here do not have and reports it, so either shape loads.
 - The Data Product Description says nothing about the encoding of the files. The loader reads UTF-8.

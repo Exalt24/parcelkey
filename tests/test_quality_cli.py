@@ -128,7 +128,7 @@ def test_load_gnaf_through_the_command_line(clean, world_dir):
     from conftest import _STATE
     _STATE["reference"] = ""
     p = cli("load-gnaf", str(world_dir / "gnaf"), check=True)
-    assert "loaded 28 files" in p.stdout and "reference table built" in p.stdout
+    assert "loaded 33 files" in p.stdout and "reference table built" in p.stdout
     p = cli("load-gnaf", str(world_dir / "gnaf"), "--no-build", check=True)
     assert "0 new rows" in p.stdout and "reference table built" not in p.stdout
 

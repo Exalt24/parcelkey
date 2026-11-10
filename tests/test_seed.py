@@ -13,7 +13,7 @@ import seed as gen
 from parcelkey.normalise import STATES, normalise_phone
 
 PSV_COLUMNS = {
-    "ADDRESS_DETAIL": 35, "ADDRESS_DEFAULT_GEOCODE": 7, "STREET_LOCALITY": 11, "LOCALITY": 9, "STATE": 5,
+    "ADDRESS_DETAIL": 35, "PRIMARY_SECONDARY": 7, "ADDRESS_DEFAULT_GEOCODE": 7, "STREET_LOCALITY": 11, "LOCALITY": 9, "STATE": 5,
 }
 
 
@@ -44,7 +44,7 @@ def test_the_same_seed_writes_the_same_bytes_and_another_seed_does_not(made, tmp
 def test_gnaf_files_use_the_documented_names_and_column_counts(made):
     out, manifest = made
     standard = sorted(p.name for p in (out / "gnaf" / "Standard").iterdir())
-    assert len(standard) == 25 and "NSW_ADDRESS_DETAIL_psv.psv" in standard and "WA_STATE_psv.psv" in standard
+    assert len(standard) == 30 and "NSW_ADDRESS_DETAIL_psv.psv" in standard and "NSW_PRIMARY_SECONDARY_psv.psv" in standard and "WA_STATE_psv.psv" in standard
     assert sorted(p.name for p in (out / "gnaf" / "Authority Code").iterdir()) == ["Authority_Code_FLAT_TYPE_AUT_psv.psv", "Authority_Code_LEVEL_TYPE_AUT_psv.psv", "Authority_Code_STREET_TYPE_AUT_psv.psv"]
     for table, ncol in PSV_COLUMNS.items():
         for path in (p for p in (out / "gnaf" / "Standard").glob("*.psv") if re.fullmatch(rf"[A-Z]+_{table}_psv\.psv", p.name)):
@@ -101,7 +101,7 @@ def test_the_world_has_every_kind_of_address(made):
     assert any(r["FLAT_NUMBER"] and not r["LEVEL_NUMBER"] for r in details)                           # a block of units
     assert any(r["LOT_NUMBER"] and not r["NUMBER_FIRST"] for r in details)                            # a lot only address
     assert any(r["LOT_NUMBER"] and r["NUMBER_FIRST"] for r in details)                                # a numbered address that still carries its lot
-    assert any(r["FLAT_TYPE_CODE"] == "SUITE" for r in details)
+    assert {r["FLAT_TYPE_CODE"] for r in details if r["FLAT_TYPE_CODE"]} == {"UNIT", "APT", "FLAT", "SE", "VLLA"}          # Geoscape's own codes, not their names
     names = [r["STREET_NAME"] for p in (out / "gnaf" / "Standard").glob("*_STREET_LOCALITY_psv.psv") for r in rows(p, "|")]
     assert any(n.startswith("MOUNT ") for n in names) and any(n.startswith("SAINT ") for n in names)
     types = {r["STREET_TYPE_CODE"] for p in (out / "gnaf" / "Standard").glob("*_STREET_LOCALITY_psv.psv") for r in rows(p, "|")}
@@ -195,3 +195,29 @@ def test_the_manifest_is_written(made):
 def test_the_command_line_writes_the_world(tmp_path, capsys):
     assert gen.main(["--out", str(tmp_path / "w"), "--seed", "3", "--addresses", "200", "--per-agency", "100"]) == 0
     assert '"seed": 3' in capsys.readouterr().out and (tmp_path / "w" / "answer_key.csv").is_file()
+
+
+def test_class_flats_are_secondary_addresses_and_the_primary_is_the_building_s_own_address(made):
+    """CLASS-TABLE: F3. Every address with flat or level information is S, every other is P, and a tower flat points at the tower's own address in PRIMARY_SECONDARY."""
+    import itertools
+    out, _ = made
+    standard = out / "gnaf" / "Standard"
+    details = {r["ADDRESS_DETAIL_PID"]: r for p in standard.glob("*_ADDRESS_DETAIL_psv.psv") for r in rows(p, "|")}
+    links = [r for p in standard.glob("*_PRIMARY_SECONDARY_psv.psv") for r in rows(p, "|")]
+    counts = Counter(("flat" if r["FLAT_NUMBER"] or r["LEVEL_NUMBER"] else "plain", r["PRIMARY_SECONDARY"]) for r in details.values())
+    table = []
+    for kind, flag in itertools.product(("flat", "plain"), ("P", "S")):
+        table.append(((kind, flag), counts[(kind, flag)] > 0, (kind, flag) in {("flat", "S"), ("plain", "P")}))
+    for link in links:
+        primary, secondary = details[link["PRIMARY_PID"]], details[link["SECONDARY_PID"]]
+        table.append((("link", link["PRIMARY_SECONDARY_PID"]),
+                      (primary["PRIMARY_SECONDARY"], bool(primary["FLAT_NUMBER"] or primary["LEVEL_NUMBER"]), secondary["PRIMARY_SECONDARY"], bool(secondary["FLAT_NUMBER"] or secondary["LEVEL_NUMBER"]),
+                       link["PS_JOIN_TYPE_CODE"], link["DATE_RETIRED"], link["PS_JOIN_COMMENT"],
+                       tuple(primary[c] for c in ("NUMBER_FIRST", "STREET_LOCALITY_PID", "LOCALITY_PID", "BUILDING_NAME")), tuple(secondary[c] for c in ("NUMBER_FIRST", "STREET_LOCALITY_PID", "LOCALITY_PID", "BUILDING_NAME"))),
+                      ("P", False, "S", True, "1", "", "", tuple(primary[c] for c in ("NUMBER_FIRST", "STREET_LOCALITY_PID", "LOCALITY_PID", "BUILDING_NAME")), tuple(primary[c] for c in ("NUMBER_FIRST", "STREET_LOCALITY_PID", "LOCALITY_PID", "BUILDING_NAME")))))
+    bad = [r for r in table if r[1] != r[2]]
+    assert not bad, bad[:3]
+    assert links and len({r["SECONDARY_PID"] for r in links}) == len(links) == len({r["PRIMARY_SECONDARY_PID"] for r in links})
+    linked = {r["SECONDARY_PID"] for r in links}
+    assert any(r["PRIMARY_SECONDARY"] == "S" and pid not in linked for pid, r in details.items())          # a block of units has no address of its own, so a flat can be secondary with no primary
+    assert any(d["BUILDING_NAME"] and not d["FLAT_NUMBER"] for d in details.values())

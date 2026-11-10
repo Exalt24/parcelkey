@@ -30,7 +30,8 @@ INIT_LOCK = 74160002                      # no-mutate: any number does, it only 
 AGENCY_TABLES = ("contact_quarantine", "contact_merge", "contact_link", "contact_identifier", "contact", "quarantine", "property_link",
                  "ingest_reject", "source_record", "source_load", "agency")
 # Shared reference data, written by the owner side only (loaders), read by the app role.
-REFERENCE_TABLES = ("address_default_geocode", "address_detail", "street_locality", "locality", "state", "flat_type_aut", "street_type_aut", "level_type_aut", "gnaf_address")
+REFERENCE_TABLES = ("address_default_geocode", "address_detail", "address_alias", "primary_secondary", "street_locality", "locality", "state", "flat_type_aut", "street_type_aut", "level_type_aut",
+                    "gnaf_address")
 # The master list: the app role may add a property and read all of them, never change or delete one.
 MASTER_TABLES = ("property",)
 # Columns of source_record the pipeline may change after ingest. The raw row and its hash are never updatable by the app role.
