@@ -63,6 +63,7 @@ def test_a_finished_run_reconciles_and_says_what_it_counted(done):
     assert res.ok, [str(f) for f in res.findings]
     text = "\n".join(res.lines)
     assert "records    7 = linked 5 + quarantined 2" in text and "orphans    0" in text and "crm_export.csv: 5 rows = stored 5" in text
+    assert "ids all match their derivation" in text and "mentions all linked or set aside" in text and "superseded 0 derived properties" in text      # every check says what it counted, so a dropped line is found
 
 
 def test_a_record_with_no_link_and_no_quarantine_is_found(done):
@@ -146,8 +147,13 @@ def test_one_derived_key_with_two_property_ids_is_found(done):
     key = admin.execute("select canon_key from property where origin = 'derived'").fetchone()[0]
     admin.execute("insert into property (property_id, origin, canon_key, display_address) values ('pk_d_0000000000000000', 'derived', %s, 'x')", (key,))
     admin.execute("update property_link set property_id = 'pk_d_0000000000000000' where record_id = 'crm:C4'")
+    original = admin.execute("select property_id from property where origin = 'derived' and canon_key = %s and property_id <> 'pk_d_0000000000000000'", (key,)).fetchone()[0]
+    admin.execute("set session_replication_role = replica")
+    admin.execute("insert into property_link (agency_id, record_id, property_id, rule, score) select agency_id, 'crm:EXTRA', %s, rule, score from property_link where record_id = 'crm:C4'", (original,))
+    admin.execute("set session_replication_role = origin")
     res = check(conn, folder)
     assert "ONE_ID" in names(res)
+    assert any(f.check == "ONE_ID" and "derived key" in str(f) and "has two ids" in str(f) for f in res.findings), [str(f) for f in res.findings]       # the per-row check names the key, not only the later count
     assert property_id_for_derived(key) != "pk_d_0000000000000000"
     admin.execute("delete from property_link where property_id = 'pk_d_0000000000000000'")
     admin.execute("delete from property where property_id = 'pk_d_0000000000000000'")
