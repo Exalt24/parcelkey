@@ -6,7 +6,7 @@ Resolve messy property addresses into one master property id, with every decisio
 
 [![CI](https://github.com/Exalt24/parcelkey/actions/workflows/ci.yml/badge.svg)](https://github.com/Exalt24/parcelkey/actions/workflows/ci.yml)
 
-**On 4,904 made-up records parcelkey made 4,547 links and 4,529 were right: precision 99.60%, and recall 98.93% of the 4,578 records that should link, with no merge of two different units. Counting the 326 records its own policy sets aside as misses, honest recall is 92.35%.** The suite has 754 tests. The mutation check changed one guard at a time in 1,440 places (1,401 from the syntax tree of 13 modules, 39 named guards) and a test failed every time. That run was reduced: 15 Hypothesis examples per test instead of 60, and only the tests that cover the mutated module. Measured 2026-11-11, numbers and commands below.
+**On 4,904 made-up records parcelkey made 4,547 links and 4,529 were right: precision 99.60%, and recall 98.93% of the 4,578 records that should link, with no merge of two different units. Counting the 326 records its own policy sets aside as misses, honest recall is 92.35%.** The suite has 754 tests. The mutation check changed one guard at a time in 1,566 places (1,527 from the syntax tree of 13 modules, 39 named guards) and a test failed every time. That run was reduced: 15 Hypothesis examples per test instead of 60, and only the tests that cover the mutated module. Measured 2026-11-11, numbers and commands below.
 
 parcelkey takes address and contact records from three feeds (a CRM export, a listing feed, a sales history), matches each address to a row in a table in the public G-NAF layout on PostgreSQL with PostGIS, and gives every property one id that is stable for one G-NAF release file. It records the rule and the score behind every link, sets aside what it cannot decide with a reason, merges duplicate contacts only on a shared email or phone, and keeps each agency's rows apart with forced row level security. The caller names the agency, one database role serves all of them, and the master property list is shared. All data in this repository is made up.
 
@@ -90,7 +90,7 @@ Also `quality`, `freshness --agency agency-a --max-age crm=168`, `quarantine --a
 
 ```
 python tools/pg.py up        # a missing database fails the tests, it never skips them
-python -m pytest             # 754 tests, about three minutes
+python -m pytest             # 769 tests, about four and a half minutes
 python tests/mutation_check.py --module normalise     # one module at a time; --guards runs the named guards; --summary totals them
 ```
 
