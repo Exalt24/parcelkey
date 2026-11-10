@@ -122,3 +122,11 @@ def test_retired_addresses_and_addresses_without_a_street_are_left_out(world, ad
 def test_load_report_defaults():
     r = LoadReport()
     assert (r.files, r.rows_read, r.rows_inserted, r.skipped_files, r.ignored_columns) == (0, 0, 0, [], {})
+
+
+def test_a_last_line_with_no_final_newline_is_loaded(empty_reference, tmp_path):
+    folder = tmp_path / "gnaf"
+    folder.mkdir()
+    (folder / "NSW_STATE_psv.psv").write_bytes(b"STATE_PID|DATE_CREATED|STATE_NAME|STATE_ABBREVIATION\n1|2016-02-01|NEW SOUTH WALES|NSW\n2|2016-02-01|VICTORIA|VIC")
+    report = gnaf.load_gnaf(empty_reference, folder)
+    assert report.rows_read == 2 and empty_reference.execute("select state_abbreviation from state order by 1").fetchall() == [("NSW",), ("VIC",)]

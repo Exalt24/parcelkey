@@ -182,3 +182,11 @@ def test_the_row_hash_is_the_sha256_of_sorted_json_that_keeps_unicode():
     assert row_sha({"b": "é", "a": "1"}) == hashlib.sha256('{"a": "1", "b": "é"}'.encode("utf-8")).hexdigest()
     with pytest.raises(FrozenInstanceError):
         SOURCES["crm"].file = "x"
+
+
+def test_a_street_with_no_number_and_a_number_with_no_street_are_both_unparseable(conn, admin, tmp_path):
+    folder = h.write_feeds(tmp_path / "f", crm_rows=[h.crm("C1", "Smith St"), h.crm("C2", "12"), h.crm("C3", "Lot 7 Smith Rd"), h.crm("C4", "12 Smith St")])
+    ingest(conn, folder / "crm_export.csv", "crm")
+    with agency_tx(conn, AGENCY) as cur:
+        normalise_pending(cur, AGENCY)
+    assert dict(admin.execute("select source_ref, norm_status from source_record").fetchall()) == {"C1": "unparseable", "C2": "unparseable", "C3": "ok", "C4": "ok"}

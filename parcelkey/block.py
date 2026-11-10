@@ -57,6 +57,4 @@ def candidates(cur: psycopg.Cursor, agency: str, record_ids: list[str], floor: f
         addr = Addr(unit=row[2], level=row[3], building=row[4], lot=row[5], number_first=row[6], number_last=row[7], street_name=row[8], street_type=row[9],
                     locality=row[10], state=row[11], postcode=row[12])
         out[rid].append(Candidate(pid, addr, float(row[13]), bool(row[14]), None if row[15] is None else float(row[15])))
-    for lst in out.values():
-        lst.sort(key=lambda c: c.pid)
     return out

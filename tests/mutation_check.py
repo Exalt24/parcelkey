@@ -86,11 +86,11 @@ GUARDS = {
     "unit_rule_missing_in_the_lot_free_path": ("parcelkey/match.py", "compatible = [c for c in same_number if not units_conflict(rec, c.addr)]", "compatible = list(same_number)", ["tests/test_match_unit.py"]),
     "distance_rule_removed": ("parcelkey/match.py", "c.dist_m is not None and c.dist_m <= cfg.lot_distance_m", "True", ["tests/test_match_unit.py"]),
     "distance_limit_off_by_inclusive": ("parcelkey/match.py", "c.dist_m <= cfg.lot_distance_m", "c.dist_m < cfg.lot_distance_m", ["tests/test_match_unit.py"]),
-    "lot_without_geocode_links": ("parcelkey/match.py", "        if lat is None or lon is None:\n            return Decision(\"quarantine\", \"LOT_NO_GEOCODE\"", "        if False:\n            return Decision(\"quarantine\", \"LOT_NO_GEOCODE\"", ["tests/test_match_unit.py"]),
+    "lot_without_geocode_links": ("parcelkey/match.py", "        if lat is None or lon is None:\n            return _set_aside(\"LOT_NO_GEOCODE\"", "        if False:\n            return _set_aside(\"LOT_NO_GEOCODE\"", ["tests/test_match_unit.py"]),
     "threshold_ignored": ("parcelkey/match.py", "if top.sim >= cfg.threshold:", "if True:", ["tests/test_match_unit.py"]),
     "threshold_exclusive": ("parcelkey/match.py", "if top.sim >= cfg.threshold:", "if top.sim > cfg.threshold:", ["tests/test_match_unit.py"]),
-    "tie_margin_ignored": ("parcelkey/match.py", "            if len(tied) > 1:\n                return Decision(\"quarantine\", \"AMBIGUOUS_TIE\", reason=\"AMBIGUOUS_TIE\", detail={\"candidates\": _cand_detail(tied)})",
-                           "            if False:\n                return Decision(\"quarantine\", \"AMBIGUOUS_TIE\", reason=\"AMBIGUOUS_TIE\", detail={\"candidates\": _cand_detail(tied)})", ["tests/test_match_unit.py"]),
+    "tie_margin_ignored": ("parcelkey/match.py", "            if len(tied) > 1:\n                return _set_aside(\"AMBIGUOUS_TIE\", {\"candidates\": _cand_detail(tied)})",
+                           "            if False:\n                return _set_aside(\"AMBIGUOUS_TIE\", {\"candidates\": _cand_detail(tied)})", ["tests/test_match_unit.py"]),
     "transposition_guard_removed": ("parcelkey/match.py", "    if swapped:\n", "    if False:\n", ["tests/test_match_unit.py"]),
     "email_not_lower_cased": ("parcelkey/normalise.py", "    lowered = text.lower()", "    lowered = text", ["tests/test_normalise.py"]),
     "phone_trunk_zero_kept": ("parcelkey/normalise.py", '    if digits.startswith("0"):\n        digits = digits[1:]', '    if False:\n        digits = digits[1:]', ["tests/test_normalise.py"]),
@@ -348,7 +348,7 @@ def summary(write: Path | None = None) -> int:
     stale = [m for m in FILES if m in data and {x["id"] for x in mutants(m)} != set(data[m])]
     if stale:
         lines.append(f"results are out of date for: {', '.join(stale)} (the source changed since they were recorded; rerun)")
-    if "guards" in data and set(data["guards"]) != set(GUARDS):
+    if "guards" in data and set(data["guards"]) != {f"guard:{n}" for n in GUARDS}:
         lines.append("results are out of date for: guards (the guard list changed; rerun)")
         stale.append("guards")
     print("\n".join(lines))
@@ -375,6 +375,10 @@ def main(argv: list[str] | None = None) -> int:
     if a.guards:
         label, ms = "guards", [{"id": f"guard:{n}", "file": f, "find": find, "replace": rep, "args": args, "kind": "guard", "line": 0} for n, (f, find, rep, args) in GUARDS.items()]
         args, timeout, needs_db = ["tests/test_normalise.py"], 300, True
+        gone = [n for n, (f, find, _, _) in GUARDS.items() if find not in (ROOT / f).read_text(encoding="utf-8")]
+        if gone:
+            print(f"these guards name text that is not in the file any more: {', '.join(gone)}", file=sys.stderr)
+            return 2
     elif a.module:
         label = a.module
         args, timeout, needs_db = TARGETS[a.module]

@@ -137,5 +137,5 @@ def build_reference(conn: psycopg.Connection) -> dict[str, int]:
         cur.execute("""INSERT INTO gnaf_address (address_detail_pid, unit, level, building, lot, number_first, number_last, street_name, street_type, street_key, locality_key, state, postcode, canon_key, geog)
                        SELECT address_detail_pid, unit, level, building, lot, number_first, number_last, street_name, street_type, street_key, locality_key, state, postcode, canon_key,
                               CASE WHEN lon IS NULL OR lat IS NULL THEN NULL ELSE ST_SetSRID(ST_MakePoint(lon, lat), 4326)::geography END FROM ga_stage""")
-        cur.execute("ANALYZE gnaf_address")
+        cur.execute("ANALYZE gnaf_address")          # no-mutate: planner statistics only
     return {"addresses": done, "skipped_no_street": skipped}

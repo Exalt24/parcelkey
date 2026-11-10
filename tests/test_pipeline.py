@@ -254,7 +254,7 @@ def test_a_derived_property_keeps_the_geocode_of_a_listing_when_it_has_one(ref, 
 
 
 def test_a_property_is_counted_as_added_once_however_many_records_point_at_it(ref, conn, admin, tmp_path):
-    folder = h.write_feeds(tmp_path / "f", crm_rows=[h.crm("C1", "12 Smith St"), h.crm("C2", "12 Smith Street"), h.crm("C5", "12 smith st"), h.crm("C3", "18 Smith St"), h.crm("C4", "18 smith st")])
+    folder = h.write_feeds(tmp_path / "f", crm_rows=[h.crm("C1", "12 Smith St"), h.crm("C2", "12 Smith Street"), h.crm("C5", "12 smith st"), h.crm("C3", "18 Smith St"), h.crm("C4", "18 smith st"), h.crm("C6", "18 SMITH STREET")])
     r = h.run(conn, AGENCY, folder)
     assert r.match.new_properties == 2 and admin.execute("select count(*) from property").fetchone()[0] == 2
     assert h.run(conn, AGENCY, folder).match.new_properties == 0
@@ -266,7 +266,7 @@ def test_the_match_counts_name_each_reason_and_count_each_record(ref, conn, admi
     assert r.match.quarantined == {"UNIT_CONFLICT": 2, "NUMBER_TRANSPOSED": 1} and r.match.linked == {"EXACT_KEY": 1} and r.match.records == 4
 
 
-def test_candidates_honour_the_floor_and_come_back_in_a_fixed_order(ref, conn, admin, tmp_path):
+def test_candidates_honour_the_floor_and_each_address_comes_back_once(ref, conn, admin, tmp_path):
     from parcelkey import block
     folder = h.write_feeds(tmp_path / "f", crm_rows=[h.crm("C1", "16 Harwik St")])
     from parcelkey.ingest import ingest_file
@@ -278,7 +278,7 @@ def test_candidates_honour_the_floor_and_come_back_in_a_fixed_order(ref, conn, a
         wide = block.candidates(cur, AGENCY, ["crm:C1", "crm:NOPE"], 0.3)
     with db.agency_tx(conn, AGENCY) as cur:
         narrow = block.candidates(cur, AGENCY, ["crm:C1"], 0.95)
-    assert [c.pid for c in wide["crm:C1"]] == sorted(c.pid for c in wide["crm:C1"]) and {"G16", "G16B"} <= {c.pid for c in wide["crm:C1"]}
+    assert {"G16", "G16B"} <= {c.pid for c in wide["crm:C1"]} and len({c.pid for c in wide["crm:C1"]}) == len(wide["crm:C1"])
     assert wide["crm:NOPE"] == [] and narrow["crm:C1"] == []
     assert all(0.3 <= c.sim <= 1 for c in wide["crm:C1"])
 

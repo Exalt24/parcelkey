@@ -191,3 +191,10 @@ def test_render_prints_each_class_row_and_each_contact_row():
     assert any("pairwise precision 100.00% (1 of 1 merged pairs), recall 50.00% (1 of 2 true pairs)" in line for line in lines)
     empty = render({**ev_, "precision": None, "recall": None})
     assert "precision n/a" in empty and "recall n/a" in empty
+
+
+def test_a_correct_link_is_never_a_unit_merge_even_when_the_truth_table_disagrees_about_the_unit(finished):
+    conn, tmp_path = finished
+    truth = {"GT5": {"pid": "GT5", "building_id": "B30", "unit": "9"}}
+    res = evaluate_with(conn, tmp_path, [key_row("crm:C3", "x", "link", pid="GT5", building="B30", unit="5")], truth)
+    assert res["totals"]["resolved"] == 1 and res["different_unit_merges"] == 0

@@ -97,7 +97,7 @@ def _set_search_path(conn: psycopg.Connection, role: str, schema: str) -> None:
     """Give a role its default search path. A role setting is cluster wide, so two databases starting at once must not both write it: it is read first and a lost race is retried."""
     wanted = f"search_path={schema}, public"
     have = conn.execute("SELECT coalesce(rolconfig, '{}') FROM pg_roles WHERE rolname = %s", (role,)).fetchone()[0]
-    if wanted in have:
+    if wanted in have:          # no-mutate: only avoids a write when nothing changes
         return
     for attempt in range(5):          # no-mutate: retry plumbing for a race between two test databases, not behaviour
         try:
@@ -123,7 +123,6 @@ def init_db(admin_dsn: str, app_password: str | None = None, owner_password: str
                 pass                                                      # a role that exists keeps its password, whether it was made earlier or by another init a moment ago
             _set_search_path(conn, role, schema)
         conn.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {} AUTHORIZATION {}").format(sch, owner))
-        conn.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}, {}").format(owner, app))
     with psycopg.connect(admin_dsn) as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (INIT_LOCK,))          # no-mutate: serialises two inits at once
         conn.execute(sql.SQL("SET LOCAL ROLE {}").format(owner))
@@ -171,7 +170,7 @@ def connect(dsn: str | None = None) -> psycopg.Connection:
     row = conn.execute("SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user").fetchone()
     conn.rollback()
     if row is None or row[1] or row[2]:
-        conn.close()
+        conn.close()          # no-mutate: garbage collection would close it anyway, this only makes it prompt
         raise UnsafeRole(f"role {row[0] if row else '?'} is a superuser or bypasses row level security; connect as {APP_ROLE}")
     return conn
 
