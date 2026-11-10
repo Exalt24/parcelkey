@@ -117,6 +117,8 @@ def decide(rec: Addr, lat: float | None, lon: float | None, cands: list[Candidat
         ranked = sorted(compatible, key=lambda c: (-c.sim, c.pid))
         top = ranked[0]
         if top.sim >= cfg.threshold:
+            if rec.street_name[0].isdigit():          # a house number read into the street name (`12 SMITH`) scores 0.8 against `SMITH`: such a record is never linked on a near miss
+                return _set_aside("BELOW_THRESHOLD", {"best": _cand_detail([top]), "threshold": cfg.threshold, "why": "the street name starts with a digit"})
             tied = [c for c in ranked if round(top.sim - c.sim, 4) <= cfg.tie_margin]          # no-mutate: the rounding only removes float noise, any number of places from 4 to 12 does that
             if len(tied) > 1:
                 return _set_aside("AMBIGUOUS_TIE", {"candidates": _cand_detail(tied)})

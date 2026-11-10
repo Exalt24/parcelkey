@@ -421,9 +421,9 @@ def test_a_foreign_number_is_not_read_as_an_australian_one():
     assert normalise_phone("61 2345 678")[0] == ""                                # ten digits with no plus: not a country code
 
 
-def test_a_unit_written_with_only_a_letter_is_not_read_as_a_unit():
+def test_a_unit_written_with_only_a_letter_after_a_unit_word_is_read_as_the_unit():
     a = normalise_address("Tower Unit G 12 Smith St", *FAKE)
-    assert (a.building, a.unit, a.number_first) == ("TOWER UNIT G", "", "12")
+    assert (a.building, a.unit, a.number_first) == ("TOWER", "G", "12")
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------------------------

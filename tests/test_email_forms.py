@@ -68,3 +68,55 @@ def test_a_blank_email_fires_nothing_and_the_address_is_not_edited():
     rows.append((("apostrophe kept", ), normalise_email("sean.o'brien@example.com"), ("sean.o'brien@example.com", ())))
     rows.append((("a name in front changes nothing else", ), normalise_email("Kate Smith <Kate.Smith@Example.com>"), ("kate.smith@example.com", ("EMAIL_NAME_DROPPED", "EMAIL_LOWERCASED"))))
     assert_table(rows)
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------
+# the fourth review (final blind recall of corpus-round-3, finding F6): an address with what a list or a sentence leaves behind it
+
+TAIL_PUNCTUATION = ["", ";", ",", ".", ";;", ",;", " ;", " ,", ". ", "; ", ".."]
+TAIL_NOTES = ["", " (Kate)", "(Kate)", " (work email)", "  (a, b)"]
+
+
+def test_class_email_trailing_punctuation_and_a_bracket_note_are_dropped():
+    """CLASS-TABLE: F6 (round 4). `kate@example.com;`, `kate@example.com.`, `kate@example.com (Kate)` and every mix of them, in every written form, give the clean address, so the same person's two
+    spellings reach one contact."""
+    rows = []
+    locals_ = ["kate.smith", "kate+news", "o'brien", "a", "first-last", "x1.y2", f"first{ATEXT_SPECIALS[0]}last"]
+    for local, (form, (text, named)), tail, note, upper in itertools.product(locals_, FORMS.items(), TAIL_PUNCTUATION, TAIL_NOTES, (False, True)):
+        address = f"{local}@{DOMAIN}"
+        written = text.format(a=address.upper() if upper else address)
+        for ending in (tail + note, note + tail, tail + note + tail):
+            got, rules = normalise_email(written + ending)
+            label = (local, form, ending, upper)
+            dropped = bool(ending.strip())
+            rows.append((("address kept", *label), got, address))
+            rows.append((("never invalid", *label), "EMAIL_INVALID" in rules, False))
+            rows.append((("tail rule", *label), "EMAIL_TAIL_DROPPED" in rules, dropped))
+            rows.append((("lower case rule", *label), "EMAIL_LOWERCASED" in rules, upper))
+            rows.append((("same address as the clean one", *label), got, normalise_email(written)[0]))
+            rows.append((("normalising the result again changes nothing", *label), normalise_email(got), (got, ())))
+    assert len(rows) > 10000
+    assert_table(rows)
+
+
+def test_class_email_a_list_of_addresses_is_still_refused():
+    """CLASS-TABLE: F6 (round 4). Two addresses in one cell, however they are separated and whatever follows them, are not one address: refused with EMAIL_INVALID, never read as the first."""
+    rows = []
+    for separator, tail, note in itertools.product(["; ", ";", ", ", ",", " ; ", " , ", " / ", " and ", " or ", " "], ["", ";", ".", ","], ["", " (both)"]):
+        written = f"kate@{DOMAIN}{separator}jim@{DOMAIN}{tail}{note}"
+        got, rules = normalise_email(written)
+        rows.append((("list refused", written), (got, "EMAIL_INVALID" in rules), ("", True)))
+    for bad in ["kate@example.com;jim", ";", ",", ".", "();", "(Kate)", "kate@example.com (Kate) jim@example.com", "kate@@example.com;"]:
+        got, rules = normalise_email(bad)
+        rows.append((("refused text", bad), (got, "EMAIL_INVALID" in rules), ("", True)))
+    assert_table(rows)
+
+
+def test_a_dot_inside_the_address_and_a_note_inside_a_display_name_are_not_trailing_text():
+    rows = [
+        (("dots kept", ), normalise_email("first.last@example.co.uk;"), ("first.last@example.co.uk", ("EMAIL_TAIL_DROPPED",))),
+        (("note before the brackets", ), normalise_email("Kate (work) <kate@example.com>"), ("kate@example.com", ("EMAIL_NAME_DROPPED",))),
+        (("note after the brackets", ), normalise_email("Kate <kate@example.com> (work);"), ("kate@example.com", ("EMAIL_TAIL_DROPPED", "EMAIL_NAME_DROPPED"))),
+        (("a clean address fires nothing", ), normalise_email("kate@example.com"), ("kate@example.com", ())),
+    ]
+    assert_table(rows)

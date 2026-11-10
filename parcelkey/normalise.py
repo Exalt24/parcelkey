@@ -56,14 +56,21 @@ DISTINCT_FLAT_TYPES = frozenset({"ANT", "ATM", "BBQ", "BTSD", "CAGE", "CARP", "C
 # The words a feed writes for the commonest of those, and for the level types that are not a plain level (LEVEL_TYPE_AUT): basement 1 is not level 1.
 OTHER_FLAT_WORDS = {"CARSPACE": "CARS", "CARPARK": "CARP", "GARAGE": "GRGE", "STORE": "STOR"}
 OTHER_LEVEL_WORDS = {"BASEMENT": "B", "MEZZANINE": "M", "PODIUM": "PDM"}
+# G-NAF flat types a feed writes as a word and a number (Building 2, Tower 3, Block 3, Penthouse 1, Duplex 2). They are read as an ordinary unit, like Shop 3, but they are not in UNIT_MARKERS: a suburb
+# can start with one (Tower Hill, Cottage Point) and UNIT_MARKERS decides what cannot be a suburb. They count only with a number or a letter after them.
+NUMBERED_UNIT_WORDS = frozenset({"BUILDING", "BLDG", "TOWER", "TWR", "BLOCK", "BLCK", "PENTHOUSE", "DUPLEX", "MAISONETTE", "COTTAGE", "STUDIO", "LOFT", "BUNGALOW", "TENANCY"})
+_PLAIN_UNIT_WORDS = UNIT_MARKERS | frozenset(OTHER_FLAT_WORDS)
+_UNIT_WORDS = _PLAIN_UNIT_WORDS | NUMBERED_UNIT_WORDS
+_COUNTRY_WORDS = frozenset({"AUSTRALIA", "AUS", "AU"})
 _FLAT_WORDS = {code: word for word, code in OTHER_FLAT_WORDS.items()}
 _LEVEL_WORDS = {code: word for word, code in OTHER_LEVEL_WORDS.items()}
 
 _ID = re.compile(r"^\d+[A-Z]?$")
+_LETTER = re.compile(r"^[A-Z]$")                                  # a flat that is only a letter (Unit B): G-NAF holds it in FLAT_NUMBER_PREFIX or FLAT_NUMBER_SUFFIX with no number
 _UID = re.compile(r"^[A-Z]{0,2}\d+[A-Z]?$")                      # a unit id may carry a letter prefix: G1, G01 (FLAT_NUMBER_PREFIX)
 _PARTS = re.compile(r"^([A-Z]{0,2})(\d+)([A-Z]?)$")
 _NUMBER = re.compile(r"^(\d+[A-Z]?)(?:-(\d+[A-Z]?))?$")
-_SLASH = re.compile(r"^([A-Z]{0,2}\d+[A-Z]?)/(\d+[A-Z]?)(?:-(\d+[A-Z]?))?$")
+_SLASH = re.compile(r"^([A-Z]{0,2}\d+[A-Z]?|[A-Z])/(\d+[A-Z]?)(?:-(\d+[A-Z]?))?$")
 _LEVEL_PREFIX = re.compile(r"^L(\d+[A-Z]?)$")                    # L3/12 is level 3 of number 12
 _GROUND_FLOOR = re.compile(r"\bGROUND (?:FLOOR|LEVEL|FLR|LVL)\b")
 _ORDINAL_FLOOR = re.compile(r"\b(\d+)(?:ST|ND|RD|TH) (?:FLOOR|LEVEL|FLR|LVL)\b")
@@ -77,6 +84,14 @@ _NOT_A_LOCALITY_START = UNIT_MARKERS | LEVEL_MARKERS | {"LOT"}
 # every character RFC 5322 allows in an unquoted local part (the apostrophe of O'Brien among them); the domain stays letters, digits and hyphens
 _EMAIL = re.compile(r"^[a-z0-9._%+\-!#$&'*/=?^`{|}~]+@[a-z0-9\-]+(?:\.[a-z0-9\-]+)+$")
 _EMAIL_NAMED = re.compile(r"^([^<>]*)<([^<>]*)>$")                   # Kate Smith <kate@example.com>
+_EMAIL_TAIL_NOTE = re.compile(r"\s*\([^()]*\)\s*$")                  # kate@example.com (Kate)
+_BRACKET_NOTE = re.compile(r"\([^()]*\)|\([^(),]*(?=,|$)")          # 12 Smith St (rear): the note and its brackets; one never closed ends at the next comma or the end of the line
+_UNIT_WORD_ALT = "|".join(sorted((w for w in _UNIT_WORDS if w != "#"), key=len, reverse=True))          # no-mutate: alternation backtracks, so the order of the words only changes speed
+# a unit number written with a dot or a dash between its level and its flat (Unit 3.02, Apt 12-05, 3.02/12 Smith St): G-NAF holds a flat as one integer (FLAT_NUMBER, up to five digits), so the parts are joined (302, 1205)
+_UNIT_DOTTED = re.compile(rf"((?<![A-Za-z0-9])(?:{_UNIT_WORD_ALT})\s*|#\s*)(\d{{1,4}})(?:\.(\d{{1,4}})|-(0\d{{1,3}}))(?![\d.\-])", re.IGNORECASE)
+_DOTTED_SLASH = re.compile(r"(?<![A-Za-z0-9.])(\d{1,4})\.(\d{1,4})(?=/\d)")
+_UNIT_NO_WORD = re.compile(rf"(?<![A-Z0-9])({_UNIT_WORD_ALT})\s+(?:NO|NUMBER|NUM|NR)\s+(?=[A-Z]{{0,2}}\d)")          # Unit No. 5, Apartment Number 5: the word is a label, the number is the unit
+_CAR_WORD = re.compile(r"(?<![A-Z0-9])CAR[ \-](SPACE|PARK)(?= +(?:[A-Z]{0,2}\d|[A-Z]\b))")          # Car Space 12 and Car Park 3 are Carspace and Carpark
 
 
 @dataclass(frozen=True)
@@ -168,7 +183,9 @@ def common_street_type(word: str) -> str:
 
 
 def _ident(raw: str, rules: list[str]) -> str:
-    """A unit or level id the G-NAF way: a leading zero is dropped (01 is 1, G01 is G1)."""
+    """A unit or level id the G-NAF way: a leading zero is dropped (01 is 1, G01 is G1). A letter on its own (the B of Unit B) stays as it is."""
+    if _LETTER.match(raw):
+        return raw
     prefix, digits, tail = _PARTS.match(raw).groups()
     kept = digits.lstrip("0") or "0"
     if kept != digits:
@@ -187,11 +204,57 @@ def _flat(marker: str, ident: str, rules: list[str]) -> str:
 
 def _takes_id(marker: str, nxt: str) -> bool:
     """True when `marker` is a unit, level or lot word that the next token completes."""
-    if marker in UNIT_MARKERS or marker in OTHER_FLAT_WORDS:
+    if marker in _PLAIN_UNIT_WORDS:          # Building 2 and Tower 3 are decided by `_numbered_word_unit`, which needs the words behind them
         return bool(_UID.match(nxt) or _SLASH.match(nxt))
     if marker in LEVEL_MARKERS:
         return bool(_ID.match(nxt) or nxt in ("G", "GROUND"))
     return (marker == "LOT" or marker in OTHER_LEVEL_WORDS) and bool(_ID.match(nxt))
+
+
+def _numbered_word_unit(tokens: list[str], i: int) -> bool:
+    """True when tokens[i] is a word such as Building, Tower or Block with a number after it, and another number stands behind that one: `Tower 3 100 Pacific Hwy` is unit 3 of number 100.
+    With no number behind it the first number is the house number and the word is part of a building name (`Skyline Tower 12 Smith St`), as it always was."""
+    return tokens[i] in NUMBERED_UNIT_WORDS and bool(_ID.match(_peek(tokens, i))) and any(_NUMBER.match(t) or _SLASH.match(t) for t in tokens[i + 2:])
+
+
+def _letter_unit_follows(tokens: list[str], i: int) -> bool:
+    """True when tokens[i] is a unit word followed by one letter and a number stands somewhere behind the letter (`Unit B 12 Smith St`): the letter is the unit. A letter with no number
+    behind it is left alone, because it could start the street."""
+    return tokens[i] in _UNIT_WORDS and bool(_LETTER.match(_peek(tokens, i))) and any(ch.isdigit() for t in tokens[i + 2:] for ch in t)
+
+
+def _unit_written_later(tokens: list[str], start: int) -> bool:
+    """True when a unit of its own (a unit word with an id, a glued `U5`, or `5/12`) is written at or after position `start`."""
+    return any(_SLASH.match(t) or _GLUED.match(t) or (t in UNIT_MARKERS and _takes_id(t, _peek(tokens, j))) for j, t in enumerate(tokens[start:], start))
+
+
+def _unit_after_street(words: list[str]) -> tuple[int, str, str] | None:
+    """Find a unit written after the street type (`Smith St Unit 5`, `Smith Street Apt 6`, `Smith St #5`). Returns (index of the unit word, the word, the id as written), the word being ''
+    for a glued `#5`, or None when there is none. The word must stand straight after a street type (or the suffix behind one) that has a name before it, so a word inside a
+    street name is never taken."""
+    for j in range(2, len(words)):
+        before = words[j - 1]
+        if not (canonical_street_type(before) or (j >= 3 and before in STREET_SUFFIX_WORDS and canonical_street_type(words[j - 2]))):
+            continue
+        glued = _GLUED.match(words[j])
+        if glued and not glued.group(3):
+            return j, "", glued.group(2)
+        nxt = _peek(words, j)
+        if words[j] in _UNIT_WORDS and (_takes_id(words[j], nxt) or _LETTER.match(nxt) or (words[j] in NUMBERED_UNIT_WORDS and _ID.match(nxt))) and not _SLASH.match(nxt):
+            return j, words[j], nxt
+    return None
+
+
+def _drop_country(chunks: list[str]) -> list[str]:
+    """Drop a country written at the end (`, Australia`, `NSW 2000 AU`): a last comma chunk that is only the country, or a last word that is the country straight after a state or a postcode."""
+    if len(chunks) >= 2 and chunks[-1] in _COUNTRY_WORDS:
+        return chunks[:-1]
+    words = chunks[-1].split() if chunks else []
+    if len(words) >= 2 and words[-1] in _COUNTRY_WORDS:
+        _, state, postcode = _split_tail(words[:-1], [])
+        if state or postcode:
+            return [*chunks[:-1], " ".join(words[:-1])]
+    return chunks
 
 
 def _take_suffix(words: list[str]) -> tuple[list[str], str]:
@@ -254,7 +317,7 @@ def _core_start(tokens: list[str]) -> int | None:
         nxt = _peek(tokens, i)
         if _GLUED.match(t) or _SLASH.match(t) or _NUMBER.match(t):
             return i
-        if _takes_id(t, nxt):
+        if _takes_id(t, nxt) or _letter_unit_follows(tokens, i) or _numbered_word_unit(tokens, i):
             return i
     return None
 
@@ -356,15 +419,28 @@ def normalise_address(line: str | None, suburb: str | None = None, state: str | 
     and the rule that says so is recorded.
     """
     rules: list[str] = []
-    text = _prep(line or "", rules)
+    raw = line or ""
+    unbracketed = _BRACKET_NOTE.sub(" ", raw)
+    if unbracketed != raw:
+        _add(rules, "BRACKET_NOTE_DROPPED")
+        raw = unbracketed
+    joined = _DOTTED_SLASH.sub(r"\1\2", _UNIT_DOTTED.sub(lambda m: m.group(1) + m.group(2) + (m.group(3) or m.group(4)), raw))
+    if joined != raw:
+        _add(rules, "UNIT_NUMBER_JOINED")
+        raw = joined
+    text = _prep(raw, rules)
     if _POSTAL.search(text):
         _add(rules, "POSTAL_ADDRESS")
         return Addr(rules=tuple(rules))
-    spaced = _SPACED_SLASH.sub("/", text)
-    if spaced != text:
-        _add(rules, "UNIT_SLASH_SPACED")
-        text = spaced
-    chunks = [c.strip() for c in text.split(",") if c.strip()]
+    for pattern, replacement, rule in ((_SPACED_SLASH, "/", "UNIT_SLASH_SPACED"), (_UNIT_NO_WORD, r"\1 ", "UNIT_NO_WORD_DROPPED"), (_CAR_WORD, r"CAR\1", "CAR_WORD_JOINED")):
+        changed = pattern.sub(replacement, text)
+        if changed != text:
+            _add(rules, rule)
+            text = changed
+    written = [c.strip() for c in text.split(",") if c.strip()]
+    chunks = _drop_country(written)
+    if chunks != written:
+        _add(rules, "COUNTRY_DROPPED")
     st, pc, locality_words = "", "", []
     have_columns = any((v or "").strip() for v in (suburb, state, postcode))          # blank columns are a feed that has none: the line is the whole address
     if have_columns:
@@ -416,15 +492,26 @@ def normalise_address(line: str | None, suburb: str | None = None, state: str | 
             else:
                 i += 1
             continue
-        if (t in UNIT_MARKERS or t in OTHER_FLAT_WORDS) and not unit and nxt:
-            slash = _SLASH.match(nxt)
+        numbered = _numbered_word_unit(tokens, i)
+        if numbered and (unit or _unit_written_later(tokens, i + 2)):
+            building = f"{building} {t} {nxt}".strip()          # `Tower 3, Unit 5, 12 Smith St` and `Unit 5, Tower 3, 12 Smith St`: Tower 3 is the building, the unit is the one written as a unit
+            _add(rules, "BUILDING_NAME_PREFIX")
+            i += 2
+            continue
+        if numbered and not unit:
+            unit = _flat(t, nxt, rules)
+            _add(rules, "UNIT_MARKER_WORD")
+            i += 2
+            continue
+        if t in _UNIT_WORDS and not unit and nxt:
+            slash = _SLASH.match(nxt) if t in _PLAIN_UNIT_WORDS else None
             if slash:
                 unit, first, last_n = _flat(t, slash.group(1), rules), slash.group(2), slash.group(3) or ""
                 _add(rules, "UNIT_MARKER_WORD")
                 _add(rules, "UNIT_SLASH_FORM")
                 i += 2
                 break
-            if _UID.match(nxt):
+            if _takes_id(t, nxt) or _letter_unit_follows(tokens, i):
                 unit = _flat(t, nxt, rules)
                 _add(rules, "UNIT_MARKER_WORD")
                 i += 2
@@ -473,6 +560,11 @@ def normalise_address(line: str | None, suburb: str | None = None, state: str | 
             i += 1
         break
     words = tokens[i:]
+    found = _unit_after_street(words)
+    if found and (not unit or unit == _flat(found[1], found[2], [])):          # a second, different unit is not guessed between: it stays where it was
+        unit = _flat(found[1], found[2], rules)
+        _add(rules, "UNIT_AFTER_STREET")
+        del words[found[0]:found[0] + (2 if found[1] else 1)]
     if not tail_locality:
         # no comma told where the street ends: read `... STATE POSTCODE` off the end, then take the suburb from the street words
         trial = []
@@ -633,6 +725,12 @@ def normalise_email(raw: str | None) -> tuple[str, tuple[str, ...]]:
     if text.lower().startswith("mailto:"):
         text = text[7:]
         _add(rules, "EMAIL_MAILTO_STRIPPED")
+    while True:          # a note in brackets and the ; , . a list or a sentence leaves at the end are not part of the address, in whatever order they come
+        trimmed = _EMAIL_TAIL_NOTE.sub("", text).rstrip(" ;,.")
+        if trimmed == text:
+            break
+        text = trimmed
+        _add(rules, "EMAIL_TAIL_DROPPED")
     named = _EMAIL_NAMED.match(text)
     if named and named.group(1).strip():
         text = named.group(2)          # a display name in front of the angle brackets is dropped, the address kept

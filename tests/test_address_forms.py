@@ -351,3 +351,283 @@ def test_class_the_postcode_written_before_the_state_between_commas_reads_the_sa
         suburb = "FAKEVILLE" if "Fakeville" in front else ""
         rows.append(((front, tail), (a.street_name, a.locality, a.state, a.postcode), ("SMITH", suburb, "NSW", "2000")))
     assert_table(rows)
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------
+# the fourth review (final blind recall of corpus-round-3, findings F1 to F5): a unit written as a letter, behind a word with a number, after the street or with a dot
+
+LETTER_UNIT_WORDS = ["Unit", "Flat", "Apt", "Apartment", "Shop", "Suite", "Villa", "Office", "Room", "Townhouse", "Ste", "U", "TH"]
+NUMBERED_WORDS = ["Building", "Bldg", "Tower", "Twr", "Block", "Blck", "Penthouse", "Duplex", "Maisonette", "Cottage", "Studio", "Loft", "Bungalow", "Tenancy"]
+FLAT_STREETS = [("Smith St", "SMITH STREET"), ("Smith Rd", "SMITH ROAD"), ("St Kilda Road", "SAINT KILDA ROAD")]
+FAKE_PARTS = {"locality": "FAKEVILLE", "state": "NSW", "postcode": "2000"}
+
+
+def fake_addr(number: str, name: str = "SMITH", unit: str = "") -> Addr:
+    return Addr(unit=unit, number_first=number, street_name=name, street_type="STREET", **FAKE_PARTS)
+
+
+def building_flats(number: str, units: list[str]) -> list[Candidate]:
+    """G-NAF holds a building at `number` and one row per unit inside it, as the real data does for a block of flats."""
+    return [Candidate(f"{number}:bldg", fake_addr(number), 1.0, True, None), *(Candidate(f"{number}:{u}", fake_addr(number, unit=u), 1.0, True, None) for u in units)]
+
+
+def test_class_a_unit_that_is_only_a_letter_is_the_unit_after_a_unit_word_and_before_a_slash():
+    """CLASS-TABLE: F1 (round 4). Unit B, Flat A, Apt C and Shop A before the street, and B/12, are unit B, A or C of number 12: the unit is never blank and never a building name."""
+    rows = []
+    for word, letter, sep, number, (street_text, street_key) in itertools.product(LETTER_UNIT_WORDS, "ABCGZ", [", ", " "], ["12", "12A", "12-14"], FLAT_STREETS):
+        a = normalise_address(f"{word} {letter}{sep}{number} {street_text}", *FAKE)
+        label = (word, letter, sep, number, street_text)
+        rows.append((label, (a.unit, a.number_key, a.street_key, a.building, a.level), (letter, number, street_key, "", "")))
+        rows.append((("rule", *label), "UNIT_MARKER_WORD" in a.rules, True))
+        rows.append((("same flat in another word", *label), a.canon_key == normalise_address(f"Unit {letter}{sep}{number} {street_text}", *FAKE).canon_key, True))
+        rows.append((("another letter is another key", *label), a.canon_key == normalise_address(f"{word} Y{sep}{number} {street_text}", *FAKE).canon_key, False))
+    for letter, number, (street_text, street_key) in itertools.product("ABCGZ", ["12", "12A", "12-14"], FLAT_STREETS):
+        for text in (f"{letter}/{number} {street_text}", f"{letter.lower()}/{number} {street_text}", f"Unit {letter}/{number} {street_text}", f"Flat {letter} / {number} {street_text}"):
+            a = normalise_address(text, *FAKE)
+            rows.append((("slash", text), (a.unit, a.number_key, a.street_key, a.building), (letter, number, street_key, "")))
+    # a unit inside a level, behind a building name: still the unit
+    for text, level, building in [("Suite A, Level 2, 40 Smith St", "2", ""), ("Level 2, Suite A, 40 Smith St", "2", ""), ("Skyline Tower, Unit A, 40 Smith St", "", "SKYLINE TOWER"), ("Unit A Level 2 40 Smith St", "2", "")]:
+        a = normalise_address(text, *FAKE)
+        rows.append((("with level or building", text), (a.unit, a.level, a.building, a.number_key), ("A", level, building, "40")))
+    assert_table(rows)
+
+
+def test_class_a_letter_unit_links_to_its_own_flat_never_to_the_building_or_a_neighbour():
+    """CLASS-TABLE: F1 (round 4). With flats A, B and C in number 12, each written form links to its own flat; a flat that is not there, or a building with no flat rows, is set aside."""
+    from parcelkey.normalise import addr_from_gnaf
+
+    rows = []
+    reference = building_flats("12", ["A", "B", "C"])
+    for word, letter, form in itertools.product(["Unit", "Flat", "Apt", "Shop"], "ABC", ["{w} {l}, 12 Smith St", "{w} {l} 12 Smith St", "{l}/12 Smith St", "{w} {l}/12 Smith St"]):
+        text = form.format(w=word, l=letter)
+        d = decide(normalise_address(text, *FAKE), None, None, reference)
+        rows.append((("flat", text), (d.outcome, d.rule, d.pid), ("link", "EXACT_KEY", f"12:{letter}")))
+        missing = decide(normalise_address(form.format(w=word, l="Q"), *FAKE), None, None, reference)
+        rows.append((("no such flat", text), (missing.outcome, missing.rule, missing.pid), ("quarantine", "UNIT_CONFLICT", "")))
+        building_only = decide(normalise_address(text, *FAKE), None, None, reference[:1])
+        rows.append((("building only", text), (building_only.outcome, building_only.rule), ("quarantine", "UNIT_CONFLICT")))
+    for letter, column in itertools.product("ABC", ("flat_number_prefix", "flat_number_suffix")):          # G-NAF keeps a flat letter in the prefix or suffix column, with no flat number
+        row = {"street_name": "SMITH", "street_type_code": "STREET", "locality_name": "FAKEVILLE", "state_abbreviation": "NSW", "postcode": "2000", "number_first": 12, column: letter}
+        rows.append((("G-NAF letter flat", column, letter), addr_from_gnaf(row).unit, letter))
+    # the ordinary inputs: a plain house, a flat with a number, and a letter that belongs to the street or to the house number
+    for text, unit, number, street_name in [("12 Smith St", "", "12", "SMITH"), ("Unit 5, 12 Smith St", "5", "12", "SMITH"), ("12 A Smith St", "", "12A", "SMITH"), ("12A Smith St", "", "12A", "SMITH"),
+                                            ("Unit A Smith St", "", "", "UNIT A SMITH"), ("Shop A Smith Rd", "", "", "SHOP A SMITH")]:
+        a = normalise_address(text, *FAKE)
+        rows.append((("ordinary", text), (a.unit, a.number_key, a.street_name), (unit, number, street_name)))
+    assert_table(rows)
+
+
+CAR_SPELLINGS = [("Car Space", "CARS"), ("CAR SPACE", "CARS"), ("car space", "CARS"), ("Car-Space", "CARS"), ("Carspace", "CARS"), ("Car Park", "CARP"), ("car park", "CARP"), ("Car-Park", "CARP"), ("Carpark", "CARP")]
+
+
+def test_class_car_space_and_car_park_are_read_like_carspace_and_carpark():
+    """CLASS-TABLE: F1 (round 4). Car Space 12 is CARS 12 and Car Park 3 is CARP 3, never the building `CAR SPACE`; a street called Car Park Road keeps its name."""
+    from parcelkey.normalise import addr_from_gnaf
+
+    rows = []
+    for (spelling, code), (ident, clean), sep in itertools.product(CAR_SPELLINGS, [("12", "12"), ("03", "3"), ("A", "A")], [", ", " "]):
+        a = normalise_address(f"{spelling} {ident}{sep}40 Smith St", *FAKE)
+        rows.append((("car word", spelling, ident, sep), (a.unit, a.number_key, a.building, a.street_key), (f"{code} {clean}", "40", "", "SMITH STREET")))
+        rows.append((("rule", spelling, ident, sep), "CAR_WORD_JOINED" in a.rules, " " in spelling or "-" in spelling))
+    for code, word in [("CARS", "Car Space"), ("CARP", "Car Park")]:
+        g = addr_from_gnaf({"street_name": "SMITH", "street_type_code": "STREET", "number_first": 40, "flat_type_code": code, "flat_number": 12})
+        rows.append((("meets G-NAF", code), normalise_address(f"{word} 12, 40 Smith St").unit, g.unit))
+    for text, street_key in [("12 Car Park Rd", "CAR PARK ROAD"), ("12 Car Space St", "CAR SPACE STREET")]:
+        a = normalise_address(text, *FAKE)
+        rows.append((("ordinary", text), (a.unit, a.number_key, a.street_key, "CAR_WORD_JOINED" in a.rules), ("", "12", street_key, False)))
+    hill = normalise_address("12 Smith St, Car Park Hill NSW 2000")
+    rows.append((("a suburb called Car Park Hill",), (hill.unit, hill.street_key, hill.locality, "CAR_WORD_JOINED" in hill.rules), ("", "SMITH STREET", "CAR PARK HILL", False)))
+    assert_table(rows)
+
+
+def test_class_a_word_with_a_number_before_the_street_is_the_unit_and_the_house_number_stays_the_house_number():
+    """CLASS-TABLE: F2 (round 4). Unit No. 5, Flat No 6, Apartment Number 5, Building 2, Tower 3, Block 3, Penthouse 1, Duplex 2 in front of 100 Smith St is unit 5, 6, 5, 2, 3, 3, 1, 2 of number 100;
+    the street name never starts with a digit."""
+    rows = []
+    labels = ["", "No ", "No. ", "NO ", "Number ", "Nr. "]
+    for word, label, ident, sep, number, (street_text, street_key) in itertools.product(LETTER_UNIT_WORDS + NUMBERED_WORDS, labels, [("5", "5"), ("05", "5"), ("5A", "5A")], [", ", " "],
+                                                                                         ["12", "100", "12A"], FLAT_STREETS):
+        text = f"{word} {label}{ident[0]}{sep}{number} {street_text}"
+        a = normalise_address(text, *FAKE)
+        rows.append((("word and number", text), (a.unit, a.number_key, a.street_key, a.building), (ident[1], number, street_key, "")))
+        rows.append((("no digit in the street name", text), a.street_name[:1].isdigit(), False))
+        rows.append((("read as a unit word", text), "UNIT_MARKER_WORD" in a.rules, True))
+        rows.append((("label rule only when there is a label", text), "UNIT_NO_WORD_DROPPED" in a.rules, bool(label)))
+    # the ordinary inputs: a building or tower in the name, a street or a suburb that starts with one of the words, a unit as well as a tower
+    for text, unit, building, number, street_name, locality in [
+        ("Skyline Tower 12 Smith St", "", "SKYLINE TOWER", "12", "SMITH", "FAKEVILLE"), ("Tower, 12 Smith St", "", "TOWER", "12", "SMITH", "FAKEVILLE"),
+        ("Block Arcade, 12 Smith St", "", "BLOCK ARCADE", "12", "SMITH", "FAKEVILLE"), ("12 Tower Rd", "", "", "12", "TOWER", "FAKEVILLE"),
+        ("Tower 3, Unit 5, 12 Smith St", "5", "TOWER 3", "12", "SMITH", "FAKEVILLE"), ("Unit 5, Tower 3, 12 Smith St", "5", "TOWER 3", "12", "SMITH", "FAKEVILLE"),
+        ("Tower 3, 5/12 Smith St", "5", "TOWER 3", "12", "SMITH", "FAKEVILLE"), ("Skyline Tower 3 12 Smith St", "3", "SKYLINE", "12", "SMITH", "FAKEVILLE"),
+        ("Tower 3/12 Smith St", "3", "TOWER", "12", "SMITH", "FAKEVILLE"), ("Tower 3 12 Villa St", "3", "", "12", "VILLA", "FAKEVILLE"), ("Block 3, 12 Shop Rd", "3", "", "12", "SHOP", "FAKEVILLE"),
+        ("Tower 3 Unit 5 12 Smith St", "5", "TOWER 3", "12", "SMITH", "FAKEVILLE"),
+    ]:
+        a = normalise_address(text, *FAKE)
+        rows.append((("ordinary", text), (a.unit, a.building, a.number_key, a.street_name, a.locality), (unit, building, number, street_name, locality)))
+        rows.append((("building rule", text), "BUILDING_NAME_PREFIX" in a.rules, bool(building)))
+    for text, locality in [("12 Smith St, Cottage Point NSW 2084", "COTTAGE POINT"), ("12 Smith St, Tower Hill VIC 3283", "TOWER HILL"), ("12 Smith St, Bungalow QLD 4870", "BUNGALOW"),
+                           ("12 Smith St Block NSW 2000", "BLOCK")]:
+        a = normalise_address(text)
+        rows.append((("a suburb that is also a word", text), (a.unit, a.street_key, a.locality), ("", "SMITH STREET", locality)))
+    assert_table(rows)
+
+
+def test_class_a_word_with_a_number_never_links_the_record_to_a_house_of_that_number():
+    """CLASS-TABLE: F2 (round 4). G-NAF holds houses at 2, 3, 5, 6 and 100 Smith Street, number 12 with flats 5 and 6, and number 100 with flat 7: a record that names a flat links to that flat or is
+    set aside, and never to the house whose number is the flat's number or to the building."""
+    rows = []
+    houses = [Candidate(f"HOUSE{n}", fake_addr(n), 1.0, True, None) for n in ("2", "3", "5", "6", "100")]
+    reference = houses + building_flats("12", ["5", "6"]) + building_flats("100", ["7"])[1:]
+    for word, label, ident, number in itertools.product(["Unit", "Flat", "Apartment", "Building", "Tower", "Block", "Penthouse", "Duplex"], ["", "No. ", "Number "], ["2", "3", "5", "6", "7", "9"],
+                                                        ["12", "100"]):
+        text = f"{word} {label}{ident}, {number} Smith St"
+        d = decide(normalise_address(text, *FAKE), None, None, reference)
+        exists = (number == "12" and ident in ("5", "6")) or (number == "100" and ident == "7")
+        rows.append((("flat", text), (d.outcome, d.pid) if exists else (d.outcome, d.rule), ("link", f"{number}:{ident}") if exists else ("quarantine", "UNIT_CONFLICT")))
+    assert_table(rows)
+
+
+def test_class_a_street_name_that_starts_with_a_digit_is_never_linked_on_a_near_miss():
+    """CLASS-TABLE: F2 (round 4). A record whose street name starts with a digit (a house number read into the street) scores 0.8 against the street without it; it is set aside and never linked by TRIGRAM,
+    while a near miss of an ordinary street name still links and an exact match of a street that starts with a digit still links."""
+    rows = []
+    for digits, name, sim in itertools.product(["12", "5", "100", "1ST", "5TH"], ["SMITH", "ST KILDA"], [0.6, 0.8, 0.95, 1.0]):
+        near = Candidate("P1", fake_addr("7", name), sim, True, None)
+        rec = fake_addr("7", f"{digits} {name}")
+        d = decide(rec, None, None, [near])
+        rows.append((("digit street", digits, name, sim), (d.outcome, d.rule, d.reason, d.detail.get("why")), ("quarantine", "BELOW_THRESHOLD", "BELOW_THRESHOLD", "the street name starts with a digit")))
+        clean = decide(fake_addr("7", name + "X"), None, None, [near])
+        rows.append((("near miss of an ordinary name", name, sim), (clean.outcome, clean.rule, clean.pid, clean.detail.get("why")), ("link", "TRIGRAM", "P1", None)))
+        exact = Candidate("P2", fake_addr("7", rec.street_name), 1.0, True, None)
+        again = decide(rec, None, None, [near, exact])
+        rows.append((("an exact street that starts with a digit", digits, name), (again.outcome, again.rule, again.pid), ("link", "EXACT_KEY", "P2")))
+    assert_table(rows)
+
+
+COUNTRY_TAILS = ["", ", Australia", " Australia", ", AU", " AU", ", Aus", " AUS", ",Australia", ", australia"]
+COUNTRY_SHAPES = [("{s}, Fakeville NSW 2000", True), ("{s}, Fakeville, NSW, 2000", True), ("{s}, Fakeville, NSW 2000", True), ("{s} Fakeville NSW 2000", True), ("{s}, Fakeville New South Wales 2000", True),
+                  ("{s}, Fakeville 2000", True), ("{s}, NSW 2000", True), ("{s}, Fakeville, NSW", True), ("{s}, Fakeville", False), ("{s}", False)]
+
+
+def test_class_a_trailing_country_and_a_bracket_note_are_dropped():
+    """CLASS-TABLE: F3 (round 4). `, Australia`, ` Australia`, `, AU`, ` AUS` after the postcode or the state, and a note such as (rear) anywhere, change nothing about the address that is read."""
+    rows = []
+    for front, (street_text, street_key), (shape, shows_the_end), tail, note in itertools.product(["", "Unit 4, ", "4/"], [("12 Smith St", "SMITH STREET"), ("12 St Kilda Road", "SAINT KILDA ROAD")],
+                                                                                                 COUNTRY_SHAPES, COUNTRY_TAILS, ["", " (rear)", " (investment property)"]):
+        if tail.startswith(" ") and not shows_the_end:
+            continue          # a bare ` Australia` straight after a street or a suburb has no state or postcode to show it is a country
+        plain = normalise_address(front + shape.format(s=street_text))
+        written = front + shape.format(s=street_text + note) + tail
+        got = normalise_address(written)
+        rows.append((("same address", written), got, plain))
+        rows.append((("country rule", written), "COUNTRY_DROPPED" in got.rules, bool(tail)))
+        rows.append((("note rule", written), "BRACKET_NOTE_DROPPED" in got.rules, bool(note)))
+        with_columns = normalise_address(written, "Fakeville", "NSW", "2000")
+        rows.append((("with the columns", written), (with_columns.street_key, with_columns.locality, with_columns.state, with_columns.postcode, with_columns.number_key),
+                     (street_key, "FAKEVILLE", "NSW", "2000", "12")))
+    # a note that was never closed ends at the next comma, or at the end of the line, and takes nothing else with it
+    for text in ["12 Smith St (rear, Fakeville NSW 2000", "12 Smith St, Fakeville NSW 2000 (rear", "12 Smith St (rear), Fakeville NSW 2000", "12 Smith St (rear, side), Fakeville NSW 2000"]:
+        a = normalise_address(text)
+        rows.append((("note", text), (a.number_key, a.street_key, a.locality, a.state, a.postcode, "BRACKET_NOTE_DROPPED" in a.rules), ("12", "SMITH STREET", "FAKEVILLE", "NSW", "2000", True)))
+    # the ordinary inputs: a street or a suburb that has the country in its name is not a country
+    for text, street_key, locality in [("12 Australia St, Fakeville NSW 2000", "AUSTRALIA STREET", "FAKEVILLE"), ("12 Smith St, Australia Fair NSW 2000", "SMITH STREET", "AUSTRALIA FAIR"),
+                                       ("12 Smith St, Fakeville NSW 2000", "SMITH STREET", "FAKEVILLE"), ("12 Au St, Fakeville NSW 2000", "AU STREET", "FAKEVILLE")]:
+        a = normalise_address(text)
+        rows.append((("ordinary", text), (a.street_key, a.locality, "COUNTRY_DROPPED" in a.rules), (street_key, locality, False)))
+    assert_table(rows)
+
+
+def test_class_a_trailing_country_does_not_make_a_second_property():
+    """CLASS-TABLE: F3 (round 4). The record with `, Australia` links like the same record without it, to the same G-NAF row, and has the same derived key."""
+    rows = []
+    reference = building_flats("12", ["5"])
+    for text in ["12 Smith St, Fakeville NSW 2000", "5/12 Smith St, Fakeville NSW 2000", "9/12 Smith St, Fakeville NSW 2000"]:
+        base = decide(normalise_address(text), None, None, reference)
+        for tail in ("", ", Australia", " Australia", ", AU", " AU", " (rear)", ", Australia (rear)"):
+            d = decide(normalise_address(text + tail), None, None, reference)
+            rows.append((("links the same", text, tail), (d.outcome, d.rule, d.pid), (base.outcome, base.rule, base.pid)))
+            rows.append((("derived key is the same", text, tail), normalise_address(text + tail).canon_key, normalise_address(text).canon_key))
+    assert_table(rows)
+
+
+# (written after the street, written in front of it, the unit key)
+AFTER_UNITS = [(", Unit 5", "Unit 5", "5"), (" Unit 5", "Unit 5", "5"), (", Apt 5", "Apt 5", "5"), (" Apartment 5", "Apartment 5", "5"), (", Flat 5", "Flat 5", "5"), (", Shop 5", "Shop 5", "5"),
+               (", Suite 05", "Suite 5", "5"), (" #5", "#5", "5"), (", Unit 5A", "Unit 5A", "5A"), (", Unit B", "Unit B", "B"), (", Shop A", "Shop A", "A"), (", Unit No. 5", "Unit 5", "5"),
+               (", Building 5", "Unit 5", "5"), (", Tower 5", "Unit 5", "5"), (", Garage 5", "Garage 5", "GRGE 5"), (", Car Space 5", "Carspace 5", "CARS 5"), (", Unit 3.02", "Unit 302", "302")]
+AFTER_STREETS = [("12 Smith St", "SMITH STREET"), ("12 Smith Street", "SMITH STREET"), ("12 Smith Rd", "SMITH ROAD"), ("12 St Kilda Road", "SAINT KILDA ROAD"), ("12 Smith St North", "SMITH STREET NORTH"),
+                 ("12 Smith Gdns", "SMITH GARDENS"), ("12 Smith St Upper", "SMITH STREET UPPER"), ("12 Smith St N", "SMITH STREET NORTH"), ("12 Smith St Lower", "SMITH STREET LOWER")]
+
+
+def test_class_a_unit_written_after_the_street_is_the_unit():
+    """CLASS-TABLE: F4 (round 4). `12 Smith St, Unit 5`, `12 Smith Street Apt 6` and `12 Smith St #5` are unit 5 or 6 of number 12 with the street type read, whether the suburb comes from columns, from the line or
+    not at all; the unit is never part of the street name and St never becomes SAINT."""
+    rows = []
+    for (street_text, street_key), (after, front, unit), where in itertools.product(AFTER_STREETS, AFTER_UNITS, ["columns", "line", "line, comma", "none"]):
+        if where == "line" and street_key.split()[-1] in ("NORTH", "UPPER", "LOWER"):
+            continue          # no comma before the suburb: the suffix after the street type is read as part of the suburb, as the SUBURB_SPLIT_HEURISTIC rule says
+        line = {"columns": street_text + after, "line": f"{street_text}{after} Fakeville NSW 2000", "line, comma": f"{street_text}{after}, Fakeville, NSW 2000", "none": street_text + after}[where]
+        parts = FAKE if where == "columns" else ("", "", "")
+        a = normalise_address(line, *parts)
+        rows.append((("unit after the street", where, line), (a.unit, a.number_key, a.street_key, a.building), (unit, "12", street_key, "")))
+        rows.append((("suburb", where, line), (a.locality, a.state, a.postcode), ("FAKEVILLE", "NSW", "2000") if where in ("columns", "line", "line, comma") else ("", "", "")))
+        rows.append((("rule", where, line), "UNIT_AFTER_STREET" in a.rules, True))
+        first = normalise_address(f"{front}, {street_text}", *parts)
+        rows.append((("same address as the unit written first", where, line), (a.unit, a.number_key, a.street_key), (first.unit, first.number_key, first.street_key)))
+    # the same unit written twice is read once; two different units are not guessed between; a word that belongs to a street or a suburb is left alone
+    for text, unit, rule in [("Unit 5, 12 Smith St, Unit 5", "5", True), ("5/12 Smith St, Unit 5", "5", True), ("Unit 5, 12 Smith St Apt 5", "5", True), ("Unit 5, 12 Smith St, Unit 6", "5", False),
+                             ("5/12 Smith St, Flat 6", "5", False), ("12 Villa St", "", False), ("12 Shop St, Fakeville", "", False), ("12 Smith St Villa Park NSW 2000", "", False),
+                             ("12 Smith St Unit Park NSW 2000", "", False), ("12 Smith St, Unit", "", False), ("12 Smith Unit 5", "", False), ("12 Big Smith Upper Unit 5", "", False),
+                             ("12 St Upper Unit 5", "", False), ("12 Smith Villa 5 Rd", "", False)]:
+        a = normalise_address(text)
+        rows.append((("two units or none", text), (a.unit, "UNIT_AFTER_STREET" in a.rules), (unit, rule)))
+    for text, unit in [("12 Smith St Unit 5/7", ""), ("12 Smith St, U5/7", "")]:          # a slash after the street is not a unit written after the street
+        a = normalise_address(text)
+        rows.append((("slash after the street", text), (a.unit, "UNIT_AFTER_STREET" in a.rules), (unit, False)))
+    assert_table(rows)
+
+
+def test_class_a_unit_written_after_the_street_links_to_its_flat_and_makes_no_new_property():
+    """CLASS-TABLE: F4 (round 4). The unit after the street links to the flat in G-NAF; a flat that is not there is set aside; none of them is a new derived property."""
+    rows = []
+    reference = building_flats("12", ["5", "6"])
+    for (after, _front, unit), (street_text, _key) in itertools.product([a for a in AFTER_UNITS if a[2] in ("5", "5A", "B")], [("12 Smith St", ""), ("12 Smith Street", "")]):
+        d = decide(normalise_address(street_text + after, *FAKE), None, None, reference)
+        rows.append((("flat", street_text + after), (d.outcome, d.pid) if unit == "5" else d.outcome, ("link", "12:5") if unit == "5" else "quarantine"))
+        rows.append((("never a new property", street_text + after), d.outcome == "new", False))
+    assert_table(rows)
+
+
+UNIT_WORDS_FOR_DOTS = ["Unit", "Apt", "Apartment", "Flat", "Suite", "Shop", "Villa", "Office", "Room", "Townhouse", "Ste", "Building", "Tower"]
+DOTTED = [("3.02", "302"), ("1.05", "105"), ("12.10", "1210"), ("0.05", "5"), ("3.2", "32"), ("12-05", "1205"), ("3-02", "302"), ("1-09", "109")]
+
+
+def test_class_a_dotted_or_dashed_unit_number_is_one_unit_number():
+    """CLASS-TABLE: F5 (round 4). Unit 3.02, Apt 1.05, Suite 12.10 and Unit 12-05 are the flats 302, 105, 1210 and 1205 (G-NAF holds a flat as one integer, FLAT_NUMBER, up to five digits, so the dot cannot be
+    kept); the house number stays the house number and the street keeps its name."""
+    rows = []
+    for word, (written, joined), sep, number, (street_text, street_key) in itertools.product(UNIT_WORDS_FOR_DOTS, DOTTED, [", ", " "], ["12", "100", "12A"], FLAT_STREETS):
+        a = normalise_address(f"{word} {written}{sep}{number} {street_text}", *FAKE)
+        label = (word, written, sep, number, street_text)
+        rows.append((label, (a.unit, a.number_key, a.street_key, a.building), (joined, number, street_key, "")))
+        rows.append((("rule", *label), "UNIT_NUMBER_JOINED" in a.rules, True))
+        rows.append((("same as the joined number", *label), a.canon_key == normalise_address(f"{word} {joined}{sep}{number} {street_text}", *FAKE).canon_key, True))
+    for (written, joined), number, (street_text, street_key) in itertools.product([d for d in DOTTED if "." in d[0]], ["12", "100"], FLAT_STREETS):
+        for text in (f"{written}/{number} {street_text}", f"U{written}/{number} {street_text}", f"#{written}, {number} {street_text}", f"U {written}, {number} {street_text}"):
+            a = normalise_address(text, *FAKE)
+            rows.append((("dotted before the slash or glued", text), (a.unit, a.number_key, a.street_key), (joined, number, street_key)))
+    # the ordinary inputs: a range of house numbers, a dash after a comma, a lot, a dot that is not in a unit
+    for text, unit, number in [("12-14 Smith St", "", "12-14"), ("Unit 5, 12-14 Smith St", "5", "12-14"), ("Unit 1, 2-4 Smith St", "1", "2-4"), ("5/12-14 Smith St", "5", "12-14"),
+                               ("Lot 7, 12 Smith St", "", "12"), ("12 Smith St. Fakeville", "", "12"), ("Unit 5 12-14 Smith St", "5", "12-14")]:
+        a = normalise_address(text, *FAKE)
+        rows.append((("ordinary", text), (a.unit, a.number_key, "UNIT_NUMBER_JOINED" in a.rules), (unit, number, False)))
+    assert_table(rows)
+
+
+def test_class_a_dotted_unit_links_to_the_flat_g_naf_holds_without_the_dot():
+    """CLASS-TABLE: F5 (round 4). A record that writes flat 302 as 3.02 links to the G-NAF flat 302 of the same number, never to the house at number 2 or 3."""
+    rows = []
+    reference = building_flats("100", ["302", "1205", "105"]) + [Candidate("HOUSE2", fake_addr("2"), 1.0, True, None), Candidate("HOUSE3", fake_addr("3"), 1.0, True, None)]
+    for text, unit in [("Unit 3.02, 100 Smith St", "302"), ("Apt 12-05, 100 Smith St", "1205"), ("Suite 1.05, 100 Smith St", "105"), ("3.02/100 Smith St", "302"), ("Unit 3.03, 100 Smith St", "")]:
+        d = decide(normalise_address(text, *FAKE), None, None, reference)
+        rows.append((("dotted flat", text), (d.outcome, d.pid) if unit else (d.outcome, d.rule), ("link", f"100:{unit}") if unit else ("quarantine", "UNIT_CONFLICT")))
+    assert_table(rows)
