@@ -71,7 +71,12 @@ _POSTAL = re.compile(r"(?:^|[\s,])(?:(?:G\s*)?P\s*O\s*BOX|LOCKED\s+BAG|PRIVATE\s
 _GLUED = re.compile("^(" + "|".join(re.escape(m) for m in sorted(UNIT_MARKERS, key=len, reverse=True)) + r")(\d+[A-Z]?)(?:/(.+))?$")          # no-mutate: alternation backtracks, so the order of the markers only changes speed
 _DISALLOWED = re.compile(r"[^A-Z0-9/,\- #]")
 _POSTCODE = re.compile(r"^\d{4}$")
-_EMAIL = re.compile(r"^[a-z0-9._%+\-]+@[a-z0-9\-]+(?:\.[a-z0-9\-]+)+$")
+_SPACED_SLASH = re.compile(r"(?<=[A-Z0-9])\s+/\s*(?=\d)|(?<=[A-Z0-9])\s*/\s+(?=\d)")          # `4 / 18`, `4 /18` and `4/ 18` are the unit slash
+_DASH_LETTER = re.compile(r"^(\d+)-([A-Z])$")                    # 4-A is number 4A
+_NOT_A_LOCALITY_START = UNIT_MARKERS | LEVEL_MARKERS | {"LOT"}
+# every character RFC 5322 allows in an unquoted local part (the apostrophe of O'Brien among them); the domain stays letters, digits and hyphens
+_EMAIL = re.compile(r"^[a-z0-9._%+\-!#$&'*/=?^`{|}~]+@[a-z0-9\-]+(?:\.[a-z0-9\-]+)+$")
+_EMAIL_NAMED = re.compile(r"^([^<>]*)<([^<>]*)>$")                   # Kate Smith <kate@example.com>
 
 
 @dataclass(frozen=True)
@@ -113,8 +118,9 @@ class Addr:
 
     @property
     def canon_key(self) -> str:
-        """The key a derived property id comes from. The postcode is left out on purpose: a feed that drops or mistypes it must not mint a second id."""
-        return "|".join((self.level, self.unit, self.lot, self.number_key, self.street_key, self.locality, self.state))
+        """The key a derived property id comes from. The postcode is left out on purpose: a feed that drops or mistypes it must not mint a second id. A blank state is taken from
+        the postcode's range (`state_for_postcode`), so a feed that leaves the state column empty reaches the same key as one that fills it; with neither, the state stays blank."""
+        return "|".join((self.level, self.unit, self.lot, self.number_key, self.street_key, self.locality, self.state or state_for_postcode(self.postcode)))
 
     def line(self) -> str:
         """The canonical one line spelling. Normalising it again returns the same parts."""
@@ -280,6 +286,65 @@ def _suburb_split(words: list[str]) -> tuple[list[str], list[str]]:
     return words, []
 
 
+def _is_state_postcode(chunk: str) -> bool:
+    """True for a comma chunk that holds only a state, a postcode or both (`NSW 2557`, `2557`)."""
+    words, state, postcode = _split_tail(chunk.split(), [])
+    return not words and bool(state or postcode)
+
+
+def _locality_like(chunk: str) -> bool:
+    """True for a comma chunk that can be a suburb name: no digit, not a unit, level or lot word first, and not ending in a common street type."""
+    words = chunk.split()
+    return bool(words) and not any(ch.isdigit() for ch in chunk) and words[0] not in _NOT_A_LOCALITY_START and not common_street_type(words[-1])
+
+
+def _read_comma_tail(chunks: list[str], trial: list[str]) -> tuple[list[str], str, str, list[str]] | None:
+    """Read the locality, state and postcode off the end of a comma separated address. Returns (chunks left, state, postcode, locality words), or None when the end holds none.
+
+    A comma between locality, state and postcode (`Fakeville, NSW 2000`, `Fakeville, NSW, 2000`) is a separator the same as a space. A last chunk that also holds the
+    street (`12 Smith St Fakeville NSW 2000`, after a comma behind the unit) is not a tail chunk: it is left for the no comma reading of the street words."""
+    k = len(chunks)
+    while k > 1 and _is_state_postcode(chunks[k - 1]):
+        k -= 1
+    if k < len(chunks):
+        rest, tail_words = chunks[:k], " ".join(chunks[k:]).split()
+        if len(rest) >= 2 and _locality_like(rest[-1]):          # the chunk before may be the suburb alone (`Fakeville`) or with the state (`Fakeville NSW`)
+            tail_words, rest = rest[-1].split() + tail_words, rest[:-1]
+        locality, state, postcode = _split_tail(tail_words, trial)
+        return rest, state, postcode, locality
+    if len(chunks) < 2:
+        return None
+    words, state, postcode = _split_tail(chunks[-1].split(), trial)
+    street_part = any(ch.isdigit() for w in words for ch in w) or (bool(words) and words[0] in _NOT_A_LOCALITY_START)
+    if (state or postcode) and not street_part or _locality_like(chunks[-1]):
+        return chunks[:-1], state, postcode, words
+    return None
+
+
+def _same_words(a: list[str], b: list[str]) -> bool:
+    return " ".join(" ".join(a).replace("-", " ").split()) == " ".join(" ".join(b).replace("-", " ").split())
+
+
+def _tail_agrees(state: str, postcode: str, locality: list[str], state2: str, postcode2: str, locality2: list[str]) -> bool:
+    """True when what the line says does not contradict what the columns say: each part is either missing on one side or equal on both."""
+    return ((not state2 or not state or state2 == state) and (not postcode2 or not postcode or postcode2 == postcode)
+            and (not locality2 or not locality or _same_words(locality2, locality)))
+
+
+_STATE_BY_POSTCODE = (          # (first, last, state): the ranges Australia Post publishes; ACT and NT sit inside the NSW and SA ranges they were cut from
+    (200, 299, "ACT"), (800, 999, "NT"), (1000, 1999, "NSW"), (2000, 2599, "NSW"), (2600, 2618, "ACT"), (2619, 2899, "NSW"), (2900, 2920, "ACT"), (2921, 2999, "NSW"),
+    (3000, 3999, "VIC"), (4000, 4999, "QLD"), (5000, 5999, "SA"), (6000, 6999, "WA"), (7000, 7999, "TAS"), (8000, 8999, "VIC"), (9000, 9999, "QLD"),
+)
+
+
+def state_for_postcode(postcode: str) -> str:
+    """The state a postcode belongs to by its range, or '' for a postcode that is not four digits or is in no range. Used only to complete a derived key, never to fill a column."""
+    if not _POSTCODE.match(postcode or ""):
+        return ""
+    value = int(postcode)
+    return next((state for lo, hi, state in _STATE_BY_POSTCODE if lo <= value <= hi), "")
+
+
 def normalise_address(line: str | None, suburb: str | None = None, state: str | None = None, postcode: str | None = None) -> Addr:
     """Parse one address.
 
@@ -292,10 +357,14 @@ def normalise_address(line: str | None, suburb: str | None = None, state: str | 
     if _POSTAL.search(text):
         _add(rules, "POSTAL_ADDRESS")
         return Addr(rules=tuple(rules))
+    spaced = _SPACED_SLASH.sub("/", text)
+    if spaced != text:
+        _add(rules, "UNIT_SLASH_SPACED")
+        text = spaced
     chunks = [c.strip() for c in text.split(",") if c.strip()]
-    tail_words: list[str] = []
     st, pc, locality_words = "", "", []
-    if suburb is not None or state is not None or postcode is not None:
+    have_columns = any((v or "").strip() for v in (suburb, state, postcode))          # blank columns are a feed that has none: the line is the whole address
+    if have_columns:
         locality_words = _prep(suburb or "", rules).replace("-", " ").split()
         if state:
             raw_state = " ".join(_prep(state, rules).split())
@@ -303,16 +372,19 @@ def normalise_address(line: str | None, suburb: str | None = None, state: str | 
             if raw_state in STATE_NAMES:
                 _add(rules, "STATE_NAME_TO_CODE")
         pc = _postcode((postcode or "").strip(), st, rules)
-    elif len(chunks) >= 2:
-        trial: list[str] = []
-        last = chunks[-1].split()
-        words, st2, pc2 = _split_tail(list(last), trial)
-        suburb_only = not any(ch.isdigit() for ch in chunks[-1]) and last[0] not in UNIT_MARKERS | LEVEL_MARKERS | {"LOT"} and not common_street_type(last[-1])
-        if st2 or pc2 or suburb_only:
-            st, pc, tail_words, locality_words = st2, pc2, words, words
-            for r in (*trial, "SUBURB_FROM_LINE"):
+    tail_locality = comma_state = False
+    trial: list[str] = []
+    tail = _read_comma_tail(chunks, trial)
+    if tail is not None:
+        rest, st2, pc2, loc2 = tail
+        if _tail_agrees(st, pc, locality_words, st2, pc2, loc2):
+            filled = (not st and bool(st2)) or (not pc and bool(pc2)) or (not locality_words and bool(loc2))
+            st, pc, locality_words = st or st2, pc or pc2, locality_words or loc2
+            tail_locality = bool(loc2)
+            comma_state = bool(st2 or pc2)          # the state or postcode came from comma chunks: with no suburb chunk before them the suburb may still end the street words
+            chunks = rest
+            for r in ((*trial, "SUBURB_FROM_LINE") if filled else ("LINE_TAIL_REPEATED",)):
                 _add(rules, r)
-            chunks.pop()
     body = " ".join(chunks)
     floors = _ORDINAL_FLOOR.sub(r"LEVEL \1", _GROUND_FLOOR.sub("LEVEL G", body))
     if floors != body:
@@ -383,19 +455,48 @@ def normalise_address(line: str | None, suburb: str | None = None, state: str | 
             i += 1
             break
         num = _NUMBER.match(t)
+        dashed = _DASH_LETTER.match(t)
+        street_words_left = len(tokens) - i - 1          # words after this one: a street name and a type at least, or the letter is part of the street
         if num and not first:
             first, last_n = num.group(1), num.group(2) or ""
             i += 1
+            if t.isdigit() and re.fullmatch(r"[A-Z]", nxt) and street_words_left >= 3:
+                first += nxt          # `4 A St Ingowick Street` is number 4A, never number 4
+                _add(rules, "NUMBER_SUFFIX_SPACED")
+                i += 1
+        elif dashed and not first and street_words_left >= 2:
+            first = dashed.group(1) + dashed.group(2)
+            _add(rules, "NUMBER_SUFFIX_SPACED")
+            i += 1
         break
     words = tokens[i:]
-    if suburb is None and state is None and postcode is None and not tail_words and not locality_words and words:
-        # one chunk, no comma: read `... STATE POSTCODE` off the end, then split the suburb from the street
-        w2, st2, pc2 = _split_tail(list(words), rules)
+    if not tail_locality:
+        # no comma told where the street ends: read `... STATE POSTCODE` off the end, then take the suburb from the street words
+        trial = []
+        w2, st2, pc2 = _split_tail(list(words), trial)
+        n = len(locality_words)
+        repeats = n > 0 and len(w2) > n + 1 and _same_words(w2[-n:], locality_words)
+        street_w, loc2, heuristic = None, [], False
         if st2 or pc2:
-            street_w, locality_w = _suburb_split(w2)
-            words, st, pc, locality_words = street_w, st2, pc2, locality_w
-            _add(rules, "SUBURB_FROM_LINE")
-            if locality_w:
+            if not locality_words:
+                street_w, loc2 = _suburb_split(w2)
+                heuristic = bool(loc2)
+            elif repeats:
+                street_w, loc2 = w2[:-n], list(locality_words)
+            elif w2 and (_take_suffix(list(w2))[1] or canonical_street_type(w2[-1])):
+                street_w = w2
+        elif repeats and common_street_type(w2[-n - 1]):
+            street_w, loc2 = w2[:-n], list(locality_words)          # the columns give the suburb and the line ends with it straight after a street type: said twice
+        elif comma_state and not locality_words and not _take_suffix(list(w2))[1]:
+            split_w, split_loc = _suburb_split(w2)
+            if split_loc:
+                street_w, loc2, heuristic = split_w, split_loc, True
+        if street_w is not None and _tail_agrees(st, pc, locality_words, st2, pc2, loc2):
+            filled = (not st and bool(st2)) or (not pc and bool(pc2)) or (not locality_words and bool(loc2))
+            words, st, pc, locality_words = street_w, st or st2, pc or pc2, locality_words or loc2
+            for r in ((*trial, "SUBURB_FROM_LINE") if filled else ("LINE_TAIL_REPEATED",)):
+                _add(rules, r)
+            if heuristic:
                 _add(rules, "SUBURB_SPLIT_HEURISTIC")
     words = [w for part in words for w in part.replace("-", " ").split()]
     words, suffix = _take_suffix(words)
@@ -529,6 +630,10 @@ def normalise_email(raw: str | None) -> tuple[str, tuple[str, ...]]:
     if text.lower().startswith("mailto:"):
         text = text[7:]
         _add(rules, "EMAIL_MAILTO_STRIPPED")
+    named = _EMAIL_NAMED.match(text)
+    if named and named.group(1).strip():
+        text = named.group(2)          # a display name in front of the angle brackets is dropped, the address kept
+        _add(rules, "EMAIL_NAME_DROPPED")
     text = text.strip("<> ")
     lowered = text.lower()
     if lowered != text:

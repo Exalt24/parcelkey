@@ -3,7 +3,8 @@
 A property id is derived, never taken from a sequence, so for one G-NAF release file the same address gets the same id on every run, on every machine and in every agency:
   matched to a G-NAF address  ->  `pk_g_` + 16 hex digits of sha256("gnaf|" + the G-NAF address detail pid)
   not in G-NAF                ->  `pk_d_` + 16 hex digits of sha256("derived|" + the canonical key of the address)
-The canonical key leaves the postcode out (see `Addr.canon_key`), so a feed that drops or mistypes it cannot mint a second id for one address.
+The canonical key leaves the postcode out (see `Addr.canon_key`), so a feed that drops or mistypes it cannot mint a second id for one address, and it takes a blank state from the
+postcode's range, so a feed that leaves the state column empty cannot either (with neither state nor postcode the key keeps a blank state).
 
 What this does not cover: the id hashes ADDRESS_DETAIL_PID. ADDRESS_FEATURE, which tracks a pid across releases, is not modelled, so a pid that a later release re-issues for the
 same address gives a new id. A derived id also stays derived after its address reaches G-NAF: `reconcile` lists it as SUPERSEDED and a person decides what to merge.

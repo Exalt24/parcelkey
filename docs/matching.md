@@ -49,7 +49,7 @@ G-NAF marks an address as an alias (ALIAS_PRINCIPAL = A) and ADDRESS_ALIAS names
 `parcelkey/master.py`. `property_id` is derived, never numbered:
 
 - matched to G-NAF: `pk_g_` + the first 16 hex digits of sha256 of `gnaf|<ADDRESS_DETAIL_PID>`
-- not in G-NAF: `pk_d_` + the first 16 hex digits of sha256 of `derived|<canonical key>`
+- not in G-NAF: `pk_d_` + the first 16 hex digits of sha256 of `derived|<canonical key>`. The key has no postcode, and a blank state is taken from the postcode's range, so a feed that leaves the state column empty reaches the same id as one that fills it. With neither a state nor a postcode the state stays blank in the key, and that address has its own id.
 
 **The rule.** For one G-NAF release file, the same address gets the same id on every run, on every machine and in every agency. A link, once written, is never rewritten, and a derived property stays derived even if the address reaches G-NAF in a later release. `reconcile` checks that every id equals its derivation.
 

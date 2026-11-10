@@ -11,9 +11,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import psycopg
 import pytest
-
-from parcelkey.normalise import normalise_address
+import seed as gen
+from conftest import _STATE
+from helpers import crm, decisions, listing, sale, write_feeds
+from parcelkey import db, gnaf
+from parcelkey.freshness import parse_max_age
+from parcelkey.master import property_id_for_derived
+from parcelkey.normalise import normalise_address, normalise_email, normalise_phone
+from parcelkey.pipeline import run_agency
+from parcelkey.records import normalise_record
 
 CORPUS_PATH = Path("C:/Projects/Professional/Operations/docs/research/2026-11-10-parcelkey-property-resolution-proof/evidence/output/corpus_parcelkey_1.jsonl")
 REPO_COPY = Path(__file__).resolve().parent / "corpus" / "addresses.jsonl"
@@ -77,3 +85,120 @@ def test_the_research_folder_copy_and_the_repository_copy_are_the_same_file():
     for case in load(CORPUS_PATH):
         got, _ = outcome(case["input"])
         assert got == case["expect"] or key(case) in DISPUTES
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+# The second review corpus (a blind adversary's 46 cases, `tests/corpus/blind_round_2.jsonl`). Each case is replayed the way the product runs it, not as a function call alone:
+# an address case goes through the real pipeline (feed file, ingest, normalise, block, match) against the generated G-NAF world of seed 7, the reference every case was written
+# for. `expect pass` means the record links to the property named in `truth_pid` (or, for the other functions, gives a usable value); `expect fail` means it is set aside or
+# refused. A case the code does not follow is named in BLIND_DISPUTES with what the code does instead and why; no case is edited, flipped or removed.
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+BLIND_CORPUS_PATH = Path("C:/Projects/Professional/Operations/docs/research/2026-11-10-parcelkey-property-resolution-proof/evidence/output/corpus_parcelkey_blind_2.jsonl")
+BLIND_REPO_COPY = Path(__file__).resolve().parent / "corpus" / "blind_round_2.jsonl"
+BLIND_AGENCY = "agency-a"
+EXTRA_4A = "GANSW_EXTRA_4A"
+
+# corpus line number -> (what the code does: "pass" or "fail", why the case is not followed)
+BLIND_DISPUTES = {
+    26: ("fail", "KNOWN_LIMIT F11: a one letter typo in the street of a lot only address with no number makes a new derived property and no wrong link; a typo is matched only with a house number, and the README says so"),
+}
+
+BLIND_CASES = load(BLIND_REPO_COPY)
+
+
+def _feed_row(source: str, ref: str, raw: dict) -> dict:
+    if source == "crm":
+        return crm(ref, raw["address"], raw["suburb"], raw["state"], raw["postcode"])
+    if source == "listing":
+        return listing(ref, raw["address"], raw["suburb"], raw["state"], raw["postcode"], raw.get("latitude", ""), raw.get("longitude", ""))
+    return sale(ref, raw["address_full"])
+
+
+def _label(i: int, c: dict) -> str:
+    inp = c["input"]
+    what = (inp.get("raw") or {}).get("address") or (inp.get("raw") or {}).get("address_full") or str(inp.get("arg") or inp.get("a"))
+    return f"blind {i}: {c['expect']}: {what[:50]}"
+
+
+@pytest.fixture(scope="module")
+def blind_decisions(admin_dsn, tmp_path_factory):
+    """case line number -> ('link', rule, gnaf pid or canonical key) or ('quarantine', reason), from the real pipeline on the seed 7 world plus the 4A row case 19 and 20 name."""
+    world = tmp_path_factory.mktemp("blind_world")
+    gen.generate(world, seed=7, addresses=4000)
+    db.wipe(admin_dsn, reference=True)
+    with psycopg.connect(admin_dsn) as c:
+        c.execute(f"set search_path = {db.SCHEMA}, public")
+        gnaf.load_gnaf(c, world / "gnaf")
+        gnaf.build_reference(c)
+        # case 19 and 20 ask for a G-NAF address 4A Saint Ingowick Street that the seed does not hold: a copy of the house at number 4 with the suffix letter
+        c.execute("""INSERT INTO gnaf_address (address_detail_pid, unit, level, building, lot, number_first, number_last, street_name, street_type, street_key, locality_key, state, postcode,
+                                               canon_key, principal_pid, display_address, geog)
+                     SELECT %s, unit, level, building, lot, '4A', number_last, street_name, street_type, street_key, locality_key, state, postcode,
+                            replace(canon_key, '|4|', '|4A|'), NULL, replace(display_address, ' 4 ', ' 4A '), geog FROM gnaf_address WHERE address_detail_pid = 'GANSW900000108'""", (EXTRA_4A,))
+    _STATE["reference"] = "blind"          # the shared fixtures reload their own reference when they see this
+    rows: dict[str, list[dict]] = {"crm": [], "listing": [], "sales": []}
+    for n, case in enumerate(BLIND_CASES, 1):
+        inp = case["input"]
+        if inp["fn"] == "normalise_record+decide":
+            rows[inp["source"]].append(_feed_row(inp["source"], f"B{n:02d}", inp["raw"]))
+    feeds = write_feeds(world / "feeds", crm_rows=rows["crm"], listing_rows=rows["listing"], sales_rows=rows["sales"])
+    with db.connect() as conn:
+        run_agency(conn, BLIND_AGENCY, feeds)
+    with psycopg.connect(admin_dsn, autocommit=True) as admin:
+        admin.execute(f"set search_path = {db.SCHEMA}, public")
+        found = decisions(admin, BLIND_AGENCY)
+    return {n: found[f"{case['input']['source']}:B{n:02d}"] for n, case in enumerate(BLIND_CASES, 1) if case["input"]["fn"] == "normalise_record+decide"}
+
+
+def blind_outcome(n: int, case: dict, found: dict) -> tuple[str, str]:
+    """('pass' | 'fail', what happened) for one case of the second corpus."""
+    inp = case["input"]
+    fn = inp["fn"]
+    if fn == "normalise_record+decide":
+        d = found[n]
+        if d[0] == "link" and d[2] == inp.get("truth_pid"):
+            return "pass", f"linked to {d[2]} by {d[1]}"
+        return "fail", f"{d[0]} {d[1]}" + ("" if d[0] == "quarantine" else f" {d[2]}")
+    if fn.startswith("normalise_record(...)"):
+        a, b = (normalise_record(inp[k]["source"], inp[k]["raw"])["addr"] for k in ("a", "b"))
+        ids = property_id_for_derived(a.canon_key), property_id_for_derived(b.canon_key)
+        return ("pass" if ids[0] == ids[1] else "fail"), f"{a.canon_key} and {b.canon_key}"
+    if fn == "normalise.normalise_phone":
+        value = normalise_phone(inp["arg"])[0]
+        return ("pass" if value else "fail"), value
+    if fn == "normalise.normalise_email":
+        value = normalise_email(inp["arg"])[0]
+        return ("pass" if value else "fail"), value
+    if fn == "freshness.parse_max_age":
+        try:
+            parse_max_age(inp["arg"])
+        except ValueError as exc:
+            return "fail", str(exc)
+        return "pass", "accepted"
+    raise AssertionError(f"unknown function {fn}")
+
+
+@pytest.mark.parametrize("n", range(1, len(BLIND_CASES) + 1), ids=[_label(i, c) for i, c in enumerate(BLIND_CASES, 1)])
+def test_replay_the_second_corpus(n, blind_decisions):
+    case = BLIND_CASES[n - 1]
+    got, what = blind_outcome(n, case, blind_decisions)
+    if n in BLIND_DISPUTES:
+        assert got == BLIND_DISPUTES[n][0] and got != case["expect"], (BLIND_DISPUTES[n][1], what)
+        return
+    assert got == case["expect"], (case["why"], what)
+
+
+def test_the_second_corpus_is_well_formed():
+    assert len(BLIND_CASES) == 46
+    assert sum(c["expect"] == "pass" for c in BLIND_CASES) >= 30 and sum(c["expect"] == "fail" for c in BLIND_CASES) >= 8
+    for c in BLIND_CASES:
+        assert {"input", "expect", "why", "source"} <= set(c) <= {"input", "expect", "why", "source", "observed", "promise"}
+        assert c["expect"] in ("pass", "fail") and c["source"] in ("real", "invented") and len(c["why"]) >= 10
+    assert set(BLIND_DISPUTES) <= set(range(1, len(BLIND_CASES) + 1))
+
+
+def test_the_second_corpus_research_copy_and_repository_copy_are_the_same_file():
+    if not BLIND_CORPUS_PATH.is_file():
+        pytest.skip(f"the research folder is not on this machine ({BLIND_CORPUS_PATH})")
+    assert load(BLIND_CORPUS_PATH) == BLIND_CASES

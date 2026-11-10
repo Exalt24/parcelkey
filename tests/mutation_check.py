@@ -42,7 +42,8 @@ COPY = ("parcelkey", "scripts", "tools", "tests", "docs", "brand", "pytest.ini",
 
 # module -> (pytest arguments for stage 1, timeout seconds, needs the database)
 TARGETS = {
-    "normalise": (["tests/test_normalise.py", "tests/test_match_unit.py", "tests/test_ordinary_addresses.py", "tests/test_corpus.py", "tests/test_gnaf_codes.py"], 120, False),
+    "normalise": (["tests/test_normalise.py", "tests/test_match_unit.py", "tests/test_ordinary_addresses.py", "tests/test_corpus.py", "tests/test_gnaf_codes.py", "tests/test_address_forms.py",
+                   "tests/test_email_forms.py"], 300, True),          # test_corpus replays the second corpus through the pipeline, so the database is needed
     "match": (["tests/test_match_unit.py", "tests/test_pipeline.py"], 300, True),
     "master": (["tests/test_pipeline.py", "tests/test_reconcile.py"], 300, True),
     "block": (["tests/test_pipeline.py"], 300, True),
@@ -96,7 +97,7 @@ GUARDS = {
     "phone_trunk_zero_kept": ("parcelkey/normalise.py", '    if digits.startswith("0"):\n        digits = digits[1:]', '    if False:\n        digits = digits[1:]', ["tests/test_normalise.py"]),
     "phone_country_code_kept": ("parcelkey/normalise.py", 'elif digits.startswith("61") and (had_plus or len(digits) >= 11):', "elif False:", ["tests/test_normalise.py"]),
     "phone_any_digits_accepted": ("parcelkey/normalise.py", 'if re.fullmatch(r"4\\d{8}|[2378]\\d{8}", digits):', "if digits:", ["tests/test_normalise.py"]),
-    "canonical_key_includes_postcode": ("parcelkey/normalise.py", "self.street_key, self.locality, self.state))", "self.street_key, self.locality, self.state, self.postcode))", ["tests/test_normalise.py"]),
+    "canonical_key_includes_postcode": ("parcelkey/normalise.py", "self.state or state_for_postcode(self.postcode)))", "self.state or state_for_postcode(self.postcode), self.postcode))", ["tests/test_normalise.py"]),
     "st_never_saint": ("parcelkey/normalise.py", '        elif w == "ST" and (saint_everywhere or i < len(words) - 1):', "        elif False:", ["tests/test_normalise.py"]),
     "rerun_decides_linked_records_again": ("parcelkey/match.py", "             AND NOT EXISTS (SELECT 1 FROM property_link l WHERE l.agency_id = r.agency_id AND l.record_id = r.record_id)\n", "", ["tests/test_pipeline.py"]),
     "quarantine_rewritten_on_every_run": ("parcelkey/match.py", "           WHERE (quarantine.reason_code, quarantine.detail) IS DISTINCT FROM (EXCLUDED.reason_code, EXCLUDED.detail)\"\"\"", "\"\"\"", ["tests/test_pipeline.py"]),
@@ -365,6 +366,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--no-full-suite", action="store_true", help="skip the whole-suite rerun of survivors")
+    ap.add_argument("--class-tests-only", action="store_true", help="stage 1 runs only the corpus replays and the CLASS-TABLE tests, and a survivor is not rerun on the whole suite: a mutant counts as killed only when one of those fails")
     ap.add_argument("--summary", action="store_true")
     ap.add_argument("--write", help="with --summary, also write the text to this file")
     ap.add_argument("--ids", help="run only these mutant ids (comma separated) and merge the outcome into the recorded results")
@@ -382,6 +384,8 @@ def main(argv: list[str] | None = None) -> int:
     elif a.module:
         label = a.module
         args, timeout, needs_db = TARGETS[a.module]
+        if a.class_tests_only:
+            args, a.no_full_suite = [*args, "-m", "class_table or corpus"], True
         ms = [{**m, "file": FILES[a.module]} for m in mutants(a.module)]
     else:
         ap.error("--module or --guards is required")

@@ -109,4 +109,14 @@ def snapshot(admin_conn, agency: str | None = None) -> dict[str, list[tuple]]:
     return out
 
 
+def pytest_collection_modifyitems(items):
+    """Mark the two kinds of test a mutant must be killed by in the class-only mutation run: a generated table (`CLASS-TABLE:` in its docstring or its module's) and a corpus replay."""
+    for item in items:
+        function = getattr(item, "function", None)
+        if "CLASS-TABLE:" in ((function.__doc__ if function else "") or "") + (item.module.__doc__ or ""):
+            item.add_marker(pytest.mark.class_table)
+        if item.module.__name__.endswith("test_corpus"):
+            item.add_marker(pytest.mark.corpus)
+
+
 os.environ.setdefault("PYTHONHASHSEED", "0")
