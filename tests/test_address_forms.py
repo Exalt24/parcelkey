@@ -865,3 +865,20 @@ def test_class_a_lot_with_a_plan_links_to_the_lot_and_a_different_lot_is_a_new_p
         other = decide(normalise_address(f"Lot 6{plan} Smith Rd", *FAKE), None, None, reference)
         rows.append((("lot 6", plan), (other.outcome, other.rule), ("new", "NEW_DERIVED")))
     assert_table(rows)
+
+
+def test_class_a_street_type_then_a_suffix_word_with_no_name_is_the_street_name_and_a_comma_state_or_postcode_splits_the_suburb():
+    """CLASS-TABLE: the two lines the full normalise run of the last pass left alive. A suffix needs a name before the street type, so `Park Upper`
+    is one street name (the suffix rule would otherwise leave a street with no name); and a state alone, a postcode alone or both after a comma
+    mark where the suburb starts when no comma comes before them."""
+    rows = []
+    for suffix_word in ("Upper", "Lower"):
+        a = normalise_address(f"5 Park {suffix_word}, Fakeville NSW 2000")
+        rows.append((("no name", suffix_word), (a.street_name, a.street_type), (f"PARK {suffix_word.upper()}", "")))
+        b = normalise_address(f"5 Smith St {suffix_word}, Fakeville NSW 2000")
+        rows.append((("with name", suffix_word), (b.street_name, b.street_type), ("SMITH", f"STREET {suffix_word.upper()}")))
+    for tail, state, postcode in ((", NSW", "NSW", ""), (", 2000", "", "2000"), (", NSW 2000", "NSW", "2000")):
+        for suburb, want in (("Fakeville", "FAKEVILLE"), ("Mount Druitt", "MOUNT DRUITT"), ("Elizabeth Grove", "ELIZABETH GROVE"), ("Oak Park", "OAK PARK")):
+            a = normalise_address(f"12 Smith St {suburb}{tail}")
+            rows.append((("comma tail", suburb, tail), (a.street_name, a.street_type, a.locality, a.state, a.postcode), ("SMITH", "STREET", want, state, postcode)))
+    assert_table(rows)
