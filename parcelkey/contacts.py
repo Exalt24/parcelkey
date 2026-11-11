@@ -1,7 +1,8 @@
 """Contact identity resolution.
 
-Two contact mentions are the same contact only when they share a normalised email or an E.164 phone number, inside one agency. A name is never evidence: two people called
-the same, with different emails and phones, stay two contacts, and two mentions of one person with no shared email or phone stay two as well.
+Two contact mentions are the same contact only when they share a normalised email or an E.164 MOBILE number, inside one agency. A landline is a shared office or household line:
+it is kept in the evidence (`landline_not_used_to_merge`) and never merges anyone, alone or with anything else, so one reception number cannot join eight people. A name is never
+evidence: two people called the same, with different emails and mobiles, stay two contacts, and two mentions of one person with no shared email or mobile stay two as well.
 
 Each decision keeps its evidence: which identifier matched, and which earlier records already carried it. A mention that would join a cluster of more than
 `max_cluster` records (a shared reception number, say) is set aside in `contact_quarantine` instead of merging a crowd.
@@ -12,12 +13,20 @@ kept with `merged_into` and every link and identifier moves to the survivor, wit
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 
 import psycopg
 from psycopg.types.json import Jsonb
 
 DEFAULT_MAX_CLUSTER = 8
+_MOBILE = re.compile(r"\+614\d{8}")
+MOBILE_SQL = r"^\+614[0-9]{8}$"          # the same rule for SQL (the quality report counts mentions with it); a test holds the two together
+
+
+def is_mobile(e164: str) -> bool:
+    """True for an Australian mobile number in E.164 (`+614` and eight digits). Only a mobile identifies one person; a landline (`+612`, `+613`, `+617`, `+618`) is shared."""
+    return bool(_MOBILE.fullmatch(e164))
 
 
 @dataclass
@@ -48,7 +57,8 @@ def resolve_pending(cur: psycopg.Cursor, agency: str, max_cluster: int = DEFAULT
            ORDER BY r.record_id""", (agency,)).fetchall()
     for record_id, name, email, phone in rows:
         counts.records += 1
-        idents = [(k, v) for k, v in (("email", email), ("phone", phone)) if v]
+        idents = [(k, v) for k, v in (("email", email), ("phone", phone if is_mobile(phone) else "")) if v]
+        landline = {"landline_not_used_to_merge": phone} if phone and not is_mobile(phone) else {}
         found: dict[str, list[str]] = {}
         for kind, value in idents:
             hit = cur.execute("SELECT contact_id FROM contact_identifier WHERE agency_id = %s AND kind = %s AND value = %s", (agency, kind, value)).fetchone()
@@ -59,7 +69,7 @@ def resolve_pending(cur: psycopg.Cursor, agency: str, max_cluster: int = DEFAULT
             cid = contact_id_for(agency, record_id)
             cur.execute("INSERT INTO contact (agency_id, contact_id, display_name) VALUES (%s, %s, %s)", (agency, cid, name))
             rule = "NEW" if idents else "NO_IDENTIFIER"
-            evidence = {"identifiers": dict(idents)}
+            evidence = {"identifiers": dict(idents), **landline}
             counts.new += 1
         else:
             if _cluster_size(cur, agency, ids) + 1 > max_cluster:
@@ -70,7 +80,7 @@ def resolve_pending(cur: psycopg.Cursor, agency: str, max_cluster: int = DEFAULT
             cid = ids[0]
             matched = sorted({k for kinds in found.values() for k in kinds})
             via = [r[0] for r in cur.execute("SELECT record_id FROM contact_link WHERE agency_id = %s AND contact_id = ANY(%s) ORDER BY record_id LIMIT 3", (agency, ids)).fetchall()]
-            evidence = {"matched_on": matched, "identifiers": dict(idents), "earlier_records": via}
+            evidence = {"matched_on": matched, "identifiers": dict(idents), "earlier_records": via, **landline}
             if len(ids) > 1:
                 rule = "BRIDGE"
                 for loser in ids[1:]:

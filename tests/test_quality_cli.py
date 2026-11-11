@@ -38,7 +38,7 @@ def test_quality_report_counts_what_the_feeds_looked_like(finished, conn):
     assert r["normalisation_rules_fired"]["POSTCODE_MISSING"] == 1 and r["normalisation_rules_fired"]["CASE_FOLDED"] >= 3
     assert r["links_by_rule"] == {"EXACT_KEY": 2, "NEW_DERIVED": 2}
     assert r["quarantine"]["UNIT_CONFLICT/open"] == 1 and r["quarantine"]["UNPARSEABLE/open"] == 1
-    assert r["contacts"] == {"mentions": 2, "mentions_without_identifier": 0, "invalid_emails": 1, "invalid_phones": 1, "emails_lowercased": 1, "contacts": 1, "merged_away": 0, "quarantined": 0}
+    assert r["contacts"] == {"mentions": 2, "mentions_without_identifier": 0, "mentions_with_a_landline_only": 0, "invalid_emails": 1, "invalid_phones": 1, "emails_lowercased": 1, "contacts": 1, "merged_away": 0, "quarantined": 0}
 
 
 def test_quality_text_is_short_and_plain(finished, conn):
@@ -149,7 +149,7 @@ def test_render_prints_every_line_of_a_known_report():
         "records": {"total": 6, "normalised_ok": 5, "unparseable": 1, "missing_postcode": 2, "with_unit": 3, "lot_only": 1, "with_coordinates": 4},
         "normalisation_rules_fired": {"CASE_FOLDED": 6, "POSTCODE_MISSING": 2}, "links_by_rule": {"EXACT_KEY": 4, "NEW_DERIVED": 1}, "postcode_mismatch_links": 3,
         "quarantine": {"UNIT_CONFLICT/open": 1}, "properties_used": {"derived": 1, "gnaf": 4},
-        "contacts": {"mentions": 4, "mentions_without_identifier": 1, "invalid_emails": 2, "invalid_phones": 3, "emails_lowercased": 4, "contacts": 3, "merged_away": 1, "quarantined": 0},
+        "contacts": {"mentions": 4, "mentions_without_identifier": 3, "mentions_with_a_landline_only": 2, "invalid_emails": 2, "invalid_phones": 3, "emails_lowercased": 4, "contacts": 3, "merged_away": 1, "quarantined": 0},
     }
     text = quality.render(report)
     assert text.splitlines() == [
@@ -161,8 +161,18 @@ def test_render_prints_every_line_of_a_known_report():
         "  links by rule: EXACT_KEY 4, NEW_DERIVED 1 (postcode did not agree on 3)",
         "  quarantine: UNIT_CONFLICT/open 1",
         "  properties used: derived 1, gnaf 4",
-        "  contact mentions 4 -> 3 contacts (1 merged away, 0 set aside); no identifier 1, bad email 2, bad phone 3",
+        "  contact mentions 4 -> 3 contacts (1 merged away, 0 set aside); no email or mobile 3 (a landline alone does not merge: 2), bad email 2, bad phone 3",
     ]
     quiet = {**report, "ingest_rejects": {}, "quarantine": {}}
     lines = quality.render(quiet).splitlines()
     assert len(lines) == 8 and "  quarantine: none" in lines and not any(line.startswith("  rejects") for line in lines)
+
+
+def test_the_quality_report_counts_a_mention_with_only_a_landline_as_having_nothing_to_merge_on(clean, conn, admin, tmp_path):
+    rows = [h.crm("C1", "12 Smith St", name="Office", phone="02 5550 0100"), h.crm("C2", "12 Smith St", name="Mob", phone="0491 570 156"), h.crm("C3", "12 Smith St", name="Mail", email="a@example.com"),
+            h.crm("C4", "12 Smith St", name="Both", email="b@example.com", phone="02 5550 0200"), h.crm("C5", "12 Smith St", name="None"), h.crm("C6", "12 Smith St", name="Bad", phone="tbc")]
+    h.run(conn, AGENCY, h.write_feeds(tmp_path / "f", crm_rows=rows))
+    with db.agency_tx(conn, AGENCY) as cur:
+        r = quality.quality_report(cur, AGENCY)
+    assert r["contacts"]["mentions"] == 6 and r["contacts"]["mentions_without_identifier"] == 3 and r["contacts"]["mentions_with_a_landline_only"] == 1
+    assert "no email or mobile 3 (a landline alone does not merge: 1)" in quality.render(r)

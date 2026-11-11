@@ -34,7 +34,7 @@ def feed_rows(draw):
         suburb = draw(st.sampled_from(["Fakeville", "Fakeville", "Otherton"]))
         pc = draw(st.sampled_from(["2000", "", "2999"]))
         email = draw(st.sampled_from(["", "a@example.com", "A@EXAMPLE.COM", "b@example.com"]))
-        phone = draw(st.sampled_from(["", "02 5550 0001", "(02) 5550 0001", "02 5550 0002"]))
+        phone = draw(st.sampled_from(["", "0491 570 001", "(0491) 570 001", "0491 570 002"]))
         rows.append(h.crm(f"C{i:03d}", form.format(u=unit, n=number, s=street), suburb=suburb, postcode=pc, name="X", email=email, phone=phone))
     return rows
 

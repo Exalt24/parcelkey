@@ -40,8 +40,8 @@ def done(hand, conn, admin, tmp_path):
     """A finished run: links, a derived property, quarantined records, contacts. Teardown restores any schema a test broke."""
     hand(REFERENCE)
     folder = h.write_feeds(tmp_path / "feeds", crm_rows=[
-        h.crm("C1", "12 Smith St", name="Kate", email="kate@example.com"), h.crm("C2", "14 Smith St", name="Kate", email="kate@example.com", phone="02 5550 0001"),
-        h.crm("C3", "Unit 9, 30 Smith St", name="Bob"), h.crm("C4", "18 Smith St", name="Bob", phone="(02) 5550 0001"), h.crm("C5", "Flat 5")],
+        h.crm("C1", "12 Smith St", name="Kate", email="kate@example.com"), h.crm("C2", "14 Smith St", name="Kate", email="kate@example.com", phone="0491 570 001"),
+        h.crm("C3", "Unit 9, 30 Smith St", name="Bob"), h.crm("C4", "18 Smith St", name="Bob", phone="(0491) 570 001"), h.crm("C5", "Flat 5")],
         listing_rows=[h.listing("L1", "Unit 5, 30 Smith St")], sales_rows=[h.sale("S1", "12 Smith St, Fakeville NSW 2000", name="K", email="KATE@example.com")])
     h.run(conn, AGENCY, folder)
     yield conn, admin, folder

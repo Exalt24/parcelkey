@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import psycopg
 
+from .contacts import MOBILE_SQL
+
 
 def quality_report(cur: psycopg.Cursor, agency: str) -> dict:
     """A plain dict of counts, safe to print as JSON. Runs inside agency_tx."""
@@ -18,9 +20,11 @@ def quality_report(cur: psycopg.Cursor, agency: str) -> dict:
     mismatch = q("SELECT count(*) FROM property_link WHERE agency_id = %s AND 'POSTCODE_MISMATCH' = ANY(rules)", agency)[0][0]
     quarantine = {f"{r[0]}/{r[1]}": r[2] for r in q("SELECT reason_code, status, count(*) FROM quarantine WHERE agency_id = %s GROUP BY 1, 2 ORDER BY 1, 2", agency)}
     properties = q("""SELECT p.origin, count(DISTINCT p.property_id) FROM property p JOIN property_link l ON l.property_id = p.property_id WHERE l.agency_id = %s GROUP BY p.origin ORDER BY 1""", agency)
-    mentions = q("SELECT count(*) FILTER (WHERE contact_name <> '' OR contact_email <> '' OR contact_phone <> ''), count(*) FILTER (WHERE contact_email = '' AND contact_phone = '' AND contact_name <> ''), "
+    mentions = q("SELECT count(*) FILTER (WHERE contact_name <> '' OR contact_email <> '' OR contact_phone <> ''), "
+                 "count(*) FILTER (WHERE contact_email = '' AND contact_phone !~ %s AND contact_name <> ''), "
                  "count(*) FILTER (WHERE 'EMAIL_INVALID' = ANY(contact_rules)), count(*) FILTER (WHERE 'PHONE_INVALID' = ANY(contact_rules)), "
-                 "count(*) FILTER (WHERE 'EMAIL_LOWERCASED' = ANY(contact_rules)) FROM source_record WHERE agency_id = %s", agency)[0]
+                 "count(*) FILTER (WHERE 'EMAIL_LOWERCASED' = ANY(contact_rules)), "
+                 "count(*) FILTER (WHERE contact_email = '' AND contact_phone <> '' AND contact_phone !~ %s) FROM source_record WHERE agency_id = %s", MOBILE_SQL, MOBILE_SQL, agency)[0]
     contacts = q("SELECT count(*) FILTER (WHERE merged_into IS NULL), count(*) FILTER (WHERE merged_into IS NOT NULL) FROM contact WHERE agency_id = %s", agency)[0]
     cq = q("SELECT count(*) FROM contact_quarantine WHERE agency_id = %s", agency)[0][0]
     return {
@@ -30,7 +34,7 @@ def quality_report(cur: psycopg.Cursor, agency: str) -> dict:
         "normalisation_rules_fired": rules,
         "links_by_rule": linked, "postcode_mismatch_links": mismatch, "quarantine": quarantine,
         "properties_used": {o: c for o, c in properties},
-        "contacts": {"mentions": mentions[0], "mentions_without_identifier": mentions[1], "invalid_emails": mentions[2], "invalid_phones": mentions[3], "emails_lowercased": mentions[4],
+        "contacts": {"mentions": mentions[0], "mentions_without_identifier": mentions[1], "mentions_with_a_landline_only": mentions[5], "invalid_emails": mentions[2], "invalid_phones": mentions[3], "emails_lowercased": mentions[4],
                      "contacts": contacts[0], "merged_away": contacts[1], "quarantined": cq},
     }
 
@@ -51,5 +55,5 @@ def render(report: dict) -> str:
     lines.append("  properties used: " + ", ".join(f"{k} {v}" for k, v in report["properties_used"].items()))
     c = report["contacts"]
     lines.append(f"  contact mentions {c['mentions']} -> {c['contacts']} contacts ({c['merged_away']} merged away, {c['quarantined']} set aside); "
-                 f"no identifier {c['mentions_without_identifier']}, bad email {c['invalid_emails']}, bad phone {c['invalid_phones']}")
+                 f"no email or mobile {c['mentions_without_identifier']} (a landline alone does not merge: {c['mentions_with_a_landline_only']}), bad email {c['invalid_emails']}, bad phone {c['invalid_phones']}")
     return "\n".join(lines)

@@ -95,7 +95,7 @@ def test_a_link_on_a_record_the_key_says_to_set_aside_lowers_precision(finished)
 def test_contact_outcomes_wrong_missed_and_resolved(hand, conn, admin, tmp_path):
     hand(REFERENCE)
     rows = [h.crm("C1", "12 Smith St", name="A", email="a@example.com"), h.crm("C2", "12 Smith St", name="A", email="a@example.com"), h.crm("C3", "12 Smith St", name="A2", email="a2@example.com"),
-            h.crm("C4", "12 Smith St", name="B", email="b@example.com", phone="02 5550 0001"), h.crm("C5", "12 Smith St", name="C", phone="02 5550 0001")]
+            h.crm("C4", "12 Smith St", name="B", email="b@example.com", phone="0491 570 001"), h.crm("C5", "12 Smith St", name="C", phone="0491 570 001")]
     h.run(conn, AGENCY, h.write_feeds(tmp_path / "f", crm_rows=rows))
     key = write(tmp_path / "key.csv", [
         key_row("crm:C1", "x", "link", pid="G12", person="PA", cclass="contact_clean"), key_row("crm:C2", "x", "link", pid="G12", person="PA", cclass="email_case"),
@@ -171,7 +171,7 @@ def test_a_person_with_no_contact_record_is_not_a_mention(finished):
 
 def test_a_mention_set_aside_by_the_cap_is_reported_as_set_aside(hand, conn, admin, tmp_path):
     hand(REFERENCE)
-    rows = [h.crm(f"C{i}", "12 Smith St", name="X", email=f"p{i}@example.com", phone="02 5550 0100") for i in range(4)]
+    rows = [h.crm(f"C{i}", "12 Smith St", name="X", email=f"p{i}@example.com", phone="0491 570 100") for i in range(4)]
     h.run(conn, AGENCY, h.write_feeds(tmp_path / "f", crm_rows=rows), max_cluster=3)
     res = evaluate_with(conn, tmp_path, [key_row(f"crm:C{i}", "x", "link", pid="G12", person=f"P{i}", cclass="contact_clean") for i in range(4)], {})
     assert res["contacts"]["by_class"]["contact_clean"]["quarantined"] == 1 and res["contacts"]["mentions"] == 4
