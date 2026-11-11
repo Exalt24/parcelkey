@@ -33,6 +33,19 @@ OTHER = "agency-b"
 _STATE = {"reference": ""}        # which reference the database holds right now: "", "world" or "hand"
 
 
+CLAIM_KEY = 5436001            # one advisory lock key; the lock is per database, so a mutation worker with its own database never meets another run's claim
+
+
+def claim_database(dsn: str) -> psycopg.Connection:
+    """Hold this database for one test run: the tests empty and refill its tables, so a second run on the same database corrupts the first one's counts (a test that truncates a table and
+    then counts it sees the other run's rows and fails with a number that points at the code, not at the second run). The lock lives as long as the returned connection stays open."""
+    conn = psycopg.connect(dsn, connect_timeout=5, autocommit=True)
+    if not conn.execute("select pg_try_advisory_lock(%s)", (CLAIM_KEY,)).fetchone()[0]:
+        conn.close()
+        raise RuntimeError(f"another run is using the database {db.database_name(dsn)!r} right now; two runs on one test database empty each other's tables and fail with wrong counts. Wait for it to finish, then run again.")
+    return conn
+
+
 @pytest.fixture(scope="session")
 def admin_dsn() -> str:
     try:
@@ -40,12 +53,14 @@ def admin_dsn() -> str:
         db.ensure_database(dsn)
         with psycopg.connect(dsn, connect_timeout=5) as conn:
             conn.execute("select 1")
+        held = claim_database(dsn)
     except psycopg.Error as exc:
         pytest.fail(f"PostgreSQL is not reachable ({exc}). Start it with: python tools/pg.py up", pytrace=False)
     except RuntimeError as exc:
         pytest.fail(f"{exc}", pytrace=False)
     db.init_db(dsn)
-    return dsn
+    yield dsn
+    held.close()
 
 
 @pytest.fixture()

@@ -6,7 +6,7 @@ Resolve messy property addresses into one master property id, with every decisio
 
 [![CI](https://github.com/Exalt24/parcelkey/actions/workflows/ci.yml/badge.svg)](https://github.com/Exalt24/parcelkey/actions/workflows/ci.yml)
 
-**On 4,904 made-up records parcelkey made 4,547 links and 4,529 were right: precision 99.60%, and recall 98.93% of the 4,578 records that should link, with no merge of two different units. Counting the 326 records its own policy sets aside as misses, honest recall is 92.35%.** The suite has 915 tests. The recorded mutation check changed one guard at a time in 1,772 places (1,732 from the syntax tree of 13 modules, 40 named guards) and a test failed every time, on the final code after the fifth review's fixes; the run was reduced (15 Hypothesis examples per test instead of 60, and only the tests that cover the mutated module). Measured 2026-11-11, numbers and commands below.
+**On 4,904 made-up records parcelkey made 4,547 links and 4,529 were right: precision 99.60%, and recall 98.93% of the 4,578 records that should link, with no merge of two different units. Counting the 326 records its own policy sets aside as misses, honest recall is 92.35%.** The suite has 952 tests. The recorded mutation check changed one guard at a time in 1,798 places (1,758 from the syntax tree of 13 modules, 40 named guards) and a test failed every time, on the final code after the fifth review's fixes; the run was reduced (15 Hypothesis examples per test instead of 60, and only the tests that cover the mutated module). Measured 2026-11-11, numbers and commands below.
 
 Two limits belong next to those figures. A flat that G-NAF does not list is never matched to a neighbouring unit: it stays in quarantine as UNIT_CONFLICT and has no master id until a later release lists it, because the matcher never lets a different unit match; 160 of the 4,904 records (3.3 percent) are set aside this way. And agencies are kept apart for each agency's own rows only: a derived id shows every agency its display address and the point of the first record that made it.
 
@@ -92,7 +92,7 @@ Also `quality`, `freshness --agency agency-a --max-age crm=168`, `quarantine --a
 
 ```
 python tools/pg.py up        # a missing database fails the tests, it never skips them
-python -m pytest             # 915 tests, in the database parcelkey_test, never the demo one
+python -m pytest             # 952 tests, in the database parcelkey_test, never the demo one
 python tests/mutation_check.py --module normalise     # one module at a time; --guards runs the named guards; --summary totals them
 ```
 

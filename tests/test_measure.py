@@ -24,9 +24,9 @@ def test_measure_refuses_a_connection_that_names_the_demo_database(clear_databas
 
 def test_measure_fills_its_own_database_and_leaves_the_one_the_tests_use_alone(clear_database_env, admin_dsn, tmp_path):
     """P5-1: a row in the tests' database survives a measure run, and the measure database holds the run."""
+    db.wipe(admin_dsn)                  # every table, not only agency: source_record has no foreign key to it, so whatever an earlier test left there would still be counted below
     with psycopg.connect(admin_dsn) as c:
         c.execute(f"set search_path = {db.SCHEMA}, public")
-        c.execute("truncate agency cascade")
         c.execute("insert into agency (agency_id) values ('agency-a')")
     gen.generate(tmp_path, seed=5, addresses=120, per_agency=60)
     clear_database_env.delenv("PARCELKEY_PG_DB", raising=False)
