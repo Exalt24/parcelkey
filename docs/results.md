@@ -38,20 +38,20 @@ Which defect classes were resolved, set aside or missed, both agencies together.
 
 ## Contacts
 
-One primary defect per mention. A mention is resolved when it is in the same contact as the person's first mention. `dup_no_shared_id` is the same person with a new email and no phone: parcelkey is built not to merge it, so the 46 misses are that choice, counted.
+One primary defect per mention. A mention is resolved when it is in the same contact as the person's first mention. `dup_no_shared_id` is the same person with a new email and no phone: parcelkey is built not to merge it, so the 46 misses are that choice, counted. Every phone number the generator writes is a landline, and only an email or a mobile number merges contacts (a landline is a shared office or household line and never merges), so `phone_format` (the same person, a phone and no email) and `dup_new_email` (the same phone, a new email) are missed in full: 109 and 78 mentions. That is the policy counted, not a matching fault; before the fifth review a shared landline merged contacts, recall read 93.99%, and one office number could join eight different people.
 
 | Contact class | Mentions | Resolved | Missed | Wrong | Set aside |
 |---|---|---|---|---|---|
 | contact_clean (first mention) | 2,117 | 2,117 | 0 | 0 | 0 |
-| name_variant (Kate, K. Smith, Smith, Kate) | 181 | 180 | 1 | 0 | 0 |
+| name_variant (Kate, K. Smith, Smith, Kate) | 181 | 169 | 12 | 0 | 0 |
 | email_case (upper case, spaces) | 118 | 116 | 2 | 0 | 0 |
-| phone_format (five written forms) | 109 | 103 | 6 | 0 | 0 |
-| dup_new_email (same phone, new email) | 78 | 77 | 1 | 0 | 0 |
+| phone_format (five written forms, a landline) | 109 | 0 | 109 | 0 | 0 |
+| dup_new_email (same phone, new email) | 78 | 0 | 78 | 0 | 0 |
 | dup_no_shared_id | 46 | 0 | 46 | 0 | 0 |
 | same_name_different_person (must stay apart) | 42 | 42 | 0 | 0 | 0 |
-| sales_buyer (a buyer who is in the CRM) | 647 | 635 | 12 | 0 | 0 |
+| sales_buyer (a buyer who is in the CRM) | 647 | 553 | 94 | 0 | 0 |
 
-3,338 mentions became 2,226 contacts. Pairwise precision 100.00% (1,407 of 1,407 merged pairs), recall 93.99% (1,407 of 1,497 true pairs).
+3,338 mentions became 2,493 contacts. Pairwise precision 100.00% (1,023 of 1,023 merged pairs), recall 68.34% (1,023 of 1,497 true pairs).
 
 ## The similarity threshold
 
