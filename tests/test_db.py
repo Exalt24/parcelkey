@@ -343,3 +343,30 @@ def test_require_agency_passes_a_started_agency_and_refuses_any_other(conn, admi
         with pytest.raises(db.UnknownAgency, match="check the spelling, or pass --new-agency to start it with this run$"):
             db.require_agency(cur, "typo", can_create=True)
     assert issubclass(db.UnknownAgency, ValueError)
+
+
+# ---- migration 005 on a database that already holds loads (P5-3) --------------------------------------------------------------------------------------
+
+def test_the_load_time_migration_upgrades_a_database_that_already_holds_loads(scratch, monkeypatch):
+    """A database made before migration 005 has loads whose loaded_at is the arrival time: it becomes received_at, a load that stored nothing loses its loaded_at, row level security stays forced."""
+    from datetime import datetime, timezone
+    tag, dsn, owner, app = scratch
+    everything = db.migration_files()
+    assert everything[-1][0] == "005_load_time.sql"
+    monkeypatch.setattr(db, "migration_files", lambda: everything[:-1])
+    db.init_db(dsn, "app-secret", "owner-secret", schema=tag, app_role=app, owner_role=owner)
+    first, second = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc), datetime(2026, 2, 3, 4, 5, 6, tzinfo=timezone.utc)
+    with psycopg.connect(dsn) as c:
+        c.execute(f'set search_path = "{tag}", public')
+        c.execute("insert into agency (agency_id) values ('a')")
+        c.execute("""insert into source_load (agency_id, source, file_name, file_sha256, row_count, stored, rejected, unchanged, loaded_at)
+                     values ('a', 'crm', 'f1.csv', 's1', 2, 2, 0, 0, %s), ('a', 'crm', 'f2.csv', 's2', 2, 0, 2, 0, %s)""", (first, second))
+    monkeypatch.setattr(db, "migration_files", lambda: everything)
+    db.init_db(dsn, "app-secret", "owner-secret", schema=tag, app_role=app, owner_role=owner)
+    with psycopg.connect(dsn) as c:
+        c.execute(f'set search_path = "{tag}", public')
+        assert c.execute("select file_name, stored, loaded_at, received_at from source_load order by load_id").fetchall() == [("f1.csv", 2, first, first), ("f2.csv", 0, None, second)]
+        assert c.execute("select relrowsecurity, relforcerowsecurity from pg_class where relname = 'source_load' and relnamespace = %s::regnamespace", (f'"{tag}"',)).fetchone() == (True, True)
+        assert c.execute("select a.attnotnull from pg_attribute a where a.attrelid = 'source_load'::regclass and a.attname in ('loaded_at', 'received_at') order by a.attname").fetchall() == [(False,), (True,)]
+        with pytest.raises(psycopg.errors.CheckViolation):
+            c.execute("""insert into source_load (agency_id, source, file_name, file_sha256, row_count, stored, rejected, unchanged) values ('a', 'crm', 'f3.csv', 's3', 1, 1, 0, 0)""")
