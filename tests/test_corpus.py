@@ -3,12 +3,14 @@
 `expect pass` means the address is handled as an ordinary property address (a street and a number, or a lot, and no mailbox). `expect fail` means it is refused or set aside with a stated
 reason: UNPARSEABLE (no street, or neither a number nor a lot) or POSTAL_ADDRESS (a PO Box, GPO Box, Locked Bag or Private Bag).
 
-The corpus lives with the research that produced it, at CORPUS_PATH. This repository keeps a copy so a clone can replay it; one test shows the two are the same when both exist.
+The corpus lives with the research that produced it, in the folder that PARCELKEY_RESEARCH_CORPORA names (the default, `research-corpora` beside `tests`, is a folder a clone does not have). This repository
+keeps a copy so a clone can replay it; one test shows the two are the same when the folder exists, and skips when it does not.
 A case is a claim: DISPUTES holds the three the code does not follow, each with the reason and what the code does instead.
 """
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import psycopg
@@ -23,7 +25,8 @@ from parcelkey.normalise import normalise_address, normalise_email, normalise_ph
 from parcelkey.pipeline import run_agency
 from parcelkey.records import normalise_record
 
-CORPUS_PATH = Path("C:/Projects/Professional/Operations/docs/research/2026-11-10-parcelkey-property-resolution-proof/evidence/output/corpus_parcelkey_1.jsonl")
+RESEARCH_DIR = Path(os.environ.get("PARCELKEY_RESEARCH_CORPORA") or Path(__file__).resolve().parent.parent / "research-corpora")
+CORPUS_PATH = RESEARCH_DIR / "corpus_parcelkey_1.jsonl"
 REPO_COPY = Path(__file__).resolve().parent / "corpus" / "addresses.jsonl"
 REASONS = {"UNPARSEABLE", "POSTAL_ADDRESS"}
 
@@ -81,7 +84,7 @@ def test_the_corpus_is_well_formed_and_big_enough():
 
 def test_the_research_folder_copy_and_the_repository_copy_are_the_same_file():
     if not CORPUS_PATH.is_file():
-        pytest.skip(f"the research folder is not on this machine ({CORPUS_PATH})")
+        pytest.skip(f"the research folder is not on this machine (set PARCELKEY_RESEARCH_CORPORA to the folder that holds {CORPUS_PATH.name})")
     assert load(CORPUS_PATH) == CASES
     for case in load(CORPUS_PATH):
         got, _ = outcome(case["input"])
@@ -95,7 +98,7 @@ def test_the_research_folder_copy_and_the_repository_copy_are_the_same_file():
 # refused. A case the code does not follow is named in BLIND_DISPUTES with what the code does instead and why; no case is edited, flipped or removed.
 # ---------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-BLIND_CORPUS_PATH = Path("C:/Projects/Professional/Operations/docs/research/2026-11-10-parcelkey-property-resolution-proof/evidence/output/corpus_parcelkey_blind_2.jsonl")
+BLIND_CORPUS_PATH = RESEARCH_DIR / "corpus_parcelkey_blind_2.jsonl"
 BLIND_REPO_COPY = Path(__file__).resolve().parent / "corpus" / "blind_round_2.jsonl"
 BLIND_AGENCY = "agency-a"
 EXTRA_4A = "GANSW_EXTRA_4A"
@@ -201,5 +204,5 @@ def test_the_second_corpus_is_well_formed():
 
 def test_the_second_corpus_research_copy_and_repository_copy_are_the_same_file():
     if not BLIND_CORPUS_PATH.is_file():
-        pytest.skip(f"the research folder is not on this machine ({BLIND_CORPUS_PATH})")
+        pytest.skip(f"the research folder is not on this machine (set PARCELKEY_RESEARCH_CORPORA to the folder that holds {BLIND_CORPUS_PATH.name})")
     assert load(BLIND_CORPUS_PATH) == BLIND_CASES

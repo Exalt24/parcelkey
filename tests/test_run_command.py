@@ -37,7 +37,7 @@ def feeds(tmp_path, spoil=None, source=None):
 @pytest.mark.parametrize("source", ["crm", "listing", "sales"])
 @pytest.mark.parametrize("spoil", sorted(SPOILS))
 def test_class_one_refused_feed_never_stops_the_others(hand, conn, admin, tmp_path, source, spoil):
-    """CLASS-TABLE (P5-8): any one of the three feeds spoiled in any of the ways a file is refused, in any position: the other two are stored, the later stages run, the refusal is reported with its reason."""
+    """CLASS-TABLE: P5-8, any one of the three feeds spoiled in any of the ways a file is refused, in any position: the other two are stored, the later stages run, the refusal is reported with its reason."""
     hand(REFERENCE)
     folder = feeds(tmp_path, spoil, source)
     report = run_agency(conn, AGENCY, folder, new_agency=True)
@@ -99,7 +99,7 @@ def test_an_unknown_agency_is_refused_by_the_pipeline_unless_it_is_new(hand, con
 
 
 def test_class_every_command_that_names_an_agency_refuses_one_that_was_never_loaded(hand, clean, admin, world_dir, tmp_path):
-    """CLASS-TABLE (P5-13): run, reconcile, freshness, quality, quarantine, explain and evaluate with a mistyped agency id exit 2, say so, and start nothing. `run --new-agency` is the one way to start an agency."""
+    """CLASS-TABLE: P5-13, run, reconcile, freshness, quality, quarantine, explain and evaluate with a mistyped agency id exit 2, say so, and start nothing. `run --new-agency` is the one way to start an agency."""
     hand(REFERENCE)
     folder = feeds(tmp_path)
     cli("run", "--agency", AGENCY, "--feeds", str(folder), "--new-agency", check=True)
