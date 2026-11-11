@@ -2,18 +2,18 @@ Mutation check results
 Command: python tests/mutation_check.py --module <name>   and   python tests/mutation_check.py --guards   then   --summary
 Each mutant changes one guard or value in a copy of the code; a mutant counts as killed when at least one test fails.
 
-block              10 mutants    10 killed    0 survived
-contacts           39 mutants    39 killed    0 survived
-db                 81 mutants    81 killed    0 survived
-evaluate           83 mutants    83 killed    0 survived
-freshness          38 mutants    38 killed    0 survived
-gnaf               54 mutants    54 killed    0 survived
-named guards       39 mutants    39 killed    0 survived
-ingest             50 mutants    50 killed    0 survived
-master             11 mutants    11 killed    0 survived
-match             233 mutants   233 killed    0 survived
-normalise         863 mutants   863 killed    0 survived
-quality            18 mutants    18 killed    0 survived
-reconcile         107 mutants   107 killed    0 survived
-records            22 mutants    22 killed    0 survived
-total            1648 mutants  1648 killed    0 survived
+block            10 mutants    10 killed    0 survived
+contacts         48 mutants    48 killed    0 survived
+db              116 mutants   116 killed    0 survived
+evaluate         83 mutants    83 killed    0 survived
+freshness        52 mutants    52 killed    0 survived
+gnaf             69 mutants    69 killed    0 survived
+named guards     40 mutants    40 killed    0 survived
+ingest           63 mutants    63 killed    0 survived
+master           17 mutants    17 killed    0 survived
+match           249 mutants   249 killed    0 survived
+normalise       867 mutants   867 killed    0 survived
+quality          18 mutants    18 killed    0 survived
+reconcile       118 mutants   118 killed    0 survived
+records          22 mutants    22 killed    0 survived
+total          1772 mutants  1772 killed    0 survived
