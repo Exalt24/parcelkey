@@ -54,19 +54,19 @@ flowchart LR
 
 ## Measured results
 
-All from my runs on 2026-11-11 (Windows 11, 16 logical cores, PostgreSQL 16 with PostGIS 3.4 in Docker on the same machine, other containers running, so the timings are rough). Full tables: [docs/results.md](docs/results.md). Raw output: [docs/measured-run.txt](docs/measured-run.txt).
+All from my runs on 2026-11-11 (Windows 11, 16 logical cores, PostgreSQL 16 with PostGIS 3.4 in Docker on the same machine, other containers running, and another heavy job was using the machine during the final run, so its timings are inflated and say nothing about speed; the counts and percentages do not depend on timing). Full tables: [docs/results.md](docs/results.md). Raw output: [docs/measured-run.txt](docs/measured-run.txt).
 
 | What | Result | How |
 |---|---|---|
 | Generated world | 4,230 addresses in the G-NAF layout (5 states, 37 localities, 226 streets) plus 92 new addresses made that are not in the file, 72 of which the feeds use; 4,904 source rows in two agencies (each 981 CRM, 662 listing, 809 sales) | `python scripts/seed.py --out out/seed --seed 7` |
-| G-NAF load | 9,135 rows in 0.74 s, flat reference of 4,230 addresses in 0.29 s | `python -m parcelkey load-gnaf out/seed/gnaf` |
+| G-NAF load | 9,135 rows in 3.00 s, flat reference of 4,230 addresses in 0.58 s | `python -m parcelkey load-gnaf out/seed/gnaf` |
 | Links | 4,547 made, 4,529 right: **precision 99.60%**. Of 4,578 records that should link, 4,529 did: **recall 98.93%**. Counting the 326 records the matcher's own policy sets aside as misses: **honest recall 92.35%** (4,529 of 4,904) | `python tools/measure.py --seed-dir out/seed` |
 | Set aside | 357 in quarantine: 324 where the answer key says that is right, 33 that could have linked | same |
 | Wrong links | 18, of which 16 are new addresses (not_in_gnaf) merged into a street one letter different | same |
 | Different units merged | 0 | same |
 | Contacts | 3,338 mentions became 2,493 contacts: pair precision 100.00%, pair recall 68.34%. Only an email or a mobile number merges, and the generator writes landline phones only, so no generated phone merges anyone; before the fifth review a shared landline merged contacts and recall read 93.99%. The generator never makes two people share an email or phone, so the 100.00% holds by construction and shows no real world rate | same |
-| One agency, 2,452 records | ingest 1.5 s, normalise 1.6 s, match 7.1 s, contacts 5.9 s | same |
-| Ten times the data | precision 99.91%, recall 99.23%, honest recall 92.95%; one agency of 23,370 records matched in 94 s (the other in 108 s) | [docs/results.md](docs/results.md) |
+| One agency, 2,452 records | ingest 21.9 s, normalise 7.0 s, match 56.7 s, contacts 24.6 s | same |
+| Ten times the data | precision 99.91%, recall 99.23%, honest recall 92.95%; one agency of 23,370 records matched in 386 s (the other in 391 s) | [docs/results.md](docs/results.md) |
 
 Which defect classes were resolved, set aside or missed is in [docs/results.md](docs/results.md).
 
@@ -110,7 +110,7 @@ The other seven, among them a wider street type list that broke ordinary suburbs
 - The loader for real G-NAF files was only run on files that `scripts/seed.py` wrote in the same layout. It has not read a real Geoscape release. File names, the pipe delimiter and the header row come from Geoscape's unpacking guide, column types from the Data Product Description. Real files may differ in ways those pages do not say.
 - Ten tables of a real release are modelled: STATE, LOCALITY, STREET_LOCALITY, ADDRESS_DETAIL, ADDRESS_ALIAS, PRIMARY_SECONDARY, ADDRESS_DEFAULT_GEOCODE and the three authority code tables. ADDRESS_SITE, ADDRESS_FEATURE, mesh blocks and the rest are skipped and reported. An address with no street is left out of the flat reference. PRIMARY_SECONDARY is loaded and the matcher does not use it.
 - There are no parcels. `legal_parcel_id` is loaded from ADDRESS_DETAIL and nothing reads it: no parcel boundaries, no cadastre, and no roll up from addresses to parcels.
-- Match time grows faster than the record count (see the ten times run). Nothing near the real file's 15 million addresses has been tried.
+- How match time grows with the record count is not settled: in the final run, which shared the machine with another heavy job, ten times the records took 5.8 to 6.8 times as long to match, and an earlier run on a quiet machine read a larger factor (see the ten times run). Nothing near the real file's 15 million addresses has been tried.
 - English style addresses only. A PO Box, GPO Box, Locked Bag or Private Bag is set aside as POSTAL_ADDRESS, also when a street comes with it. Other mailbox forms are not recognised: Post Office Box written out, Private Mail Bag, CMB and Roadside Mailbox have no street and are set aside as UNPARSEABLE, while `RMB 5 Smith Rd` and `Parcel Locker 12 Smith St` are read as that street address. Rural and intersection addresses have no street number and are set aside as unparseable. A street suffix is read only straight after a street type, and with no comma and no suburb field it is read as part of the suburb. There are no suburb typos (the suburb must agree exactly), so a misspelt suburb written with no postcode mints a second derived id for an address G-NAF lists, and with its postcode it is set aside as LOCALITY_CONFLICT; and there is no postcode inference; only an NT postcode gets its lost zero back. A postcode fills a blank state only in a derived property's key. `4 A St Ingowick Street` is number 4A, so `5 O Connell Street` is read as 5O.
 - A flat that G-NAF does not list stays in quarantine as UNIT_CONFLICT with no master id until a later release lists it, whatever the feeds say: the unit rule cannot be switched off, and a new or unlisted flat is the price of it (the unit_unknown and tower_no_unit_noparent classes in [docs/results.md](docs/results.md)).
 - Only 15 of G-NAF's 53 flat types are kept apart from a unit (a carspace, a garage and the like). `Shop 3` and `Unit 3` in one building read as one unit. `L3/12` is read as level 3 of number 12, where it could be a flat called L3.

@@ -1,6 +1,6 @@
 # Measured results in full
 
-Run on 2026-11-11: Windows 11, 16 logical cores, Python 3.13, PostgreSQL 16 with PostGIS 3.4 in Docker on the same machine, other containers running. The raw output is in [measured-run.txt](measured-run.txt). Both agencies are summed here. Resolved is a link to the property the answer key names. Set aside is quarantine where the key says that is right. Missed is quarantine where the key names a property. Wrong is a link to another property. Recall is resolved over the records the key says should link. Honest recall is resolved over every record in the key, so the records the key says to set aside count as misses. Read the last section, How accuracy was checked, and what it cannot show, before quoting any figure.
+Run on 2026-11-11: Windows 11, 16 logical cores, Python 3.13, PostgreSQL 16 with PostGIS 3.4 in Docker on the same machine, other containers running, and another heavy job was using the machine during the final run, so its timings are inflated and say nothing about speed; the counts and percentages do not depend on timing. The raw output is in [measured-run.txt](measured-run.txt). Both agencies are summed here. Resolved is a link to the property the answer key names. Set aside is quarantine where the key says that is right. Missed is quarantine where the key names a property. Wrong is a link to another property. Recall is resolved over the records the key says should link. Honest recall is resolved over every record in the key, so the records the key says to set aside count as misses. Read the last section, How accuracy was checked, and what it cannot show, before quoting any figure.
 
 The world has 4,230 addresses in the G-NAF layout and 92 made up addresses that are not in it. The feeds use 72 of those 92 (`new_builds_in_feeds` in `manifest.json`), which is the number the answer key holds.
 
@@ -79,21 +79,21 @@ The same data, both agencies, at five values (`python tools/measure.py --seed-di
 
 ## Ten times the data
 
-`python scripts/seed.py --out out/seed40k --seed 7 --addresses 40000`, then `python tools/measure.py --seed-dir out/seed40k`. 40,295 addresses, 85,781 G-NAF rows loaded in 2.41 s, flat reference built in 2.49 s, two agencies of 23,370 records.
+`python scripts/seed.py --out out/seed40k --seed 7 --addresses 40000`, then `python tools/measure.py --seed-dir out/seed40k`. 40,295 addresses, 85,781 G-NAF rows loaded in 3.51 s, flat reference built in 7.15 s, two agencies of 23,370 records.
 
 | | Agency A | Agency B |
 |---|---|---|
 | Precision | 99.94% (21,720 of 21,734) | 99.89% (21,724 of 21,748) |
 | Recall | 99.32% | 99.15% |
-| Ingest | 13.9 s | 14.3 s |
-| Normalise | 16.3 s | 16.3 s |
-| Match | 94.2 s | 108.3 s |
-| Contacts | 109.3 s | 68.1 s |
+| Ingest | 98.1 s | 62.3 s |
+| Normalise | 108.4 s | 62.9 s |
+| Match | 386.3 s | 390.9 s |
+| Contacts | 162.5 s | 228.4 s |
 | Reconcile | passes | passes |
 
 Both agencies together: 43,482 links made, 43,444 right, precision 99.91%. Recall is 99.23% (43,444 of 43,779 that should link) and honest recall is 92.95% (43,444 of 46,740, with the 2,961 policy records counted as misses).
 
-Against the 4,904 record run (7.1 s and 7.1 s to match one agency), ten times the records took 13 to 15 times as long to match. The trigram branch reads an index over the whole address table. Filtering to the streets of one postcode first, or partitioning the table by state, would keep the growth flat. That is not built.
+Against the 4,904 record run of the same final session (56.7 s and 67.1 s to match one agency), ten times the records took 5.8 to 6.8 times as long to match. That session shared the machine with another heavy job, so it does not settle how match time grows: an earlier run on a quiet machine, before the fifth review, read a larger factor than this one, so the growth may be faster than the figures here show. If it does grow faster than the records, the cause to look at first is the trigram branch, which reads an index over the whole address table; filtering to the streets of one postcode first, or partitioning the table by state, is the change that would keep the growth flat. That is not built.
 
 ## How accuracy was checked, and what it cannot show
 

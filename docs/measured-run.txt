@@ -1,5 +1,5 @@
 Measured run, 2026-11-11
-Machine: Windows 11, 16 logical cores, Python 3.13, PostgreSQL 16 with PostGIS 3.4 in Docker on the same machine, other containers running.
+Machine: Windows 11, 16 logical cores, Python 3.13, PostgreSQL 16 with PostGIS 3.4 in Docker on the same machine, other containers running, and another heavy job was using the machine during this run (its timings are inflated).
 
 == python scripts/seed.py --out out/seed --seed 7
 {"seed": 7, "properties_in_gnaf": 4230, "new_builds_not_in_gnaf": 92, "new_builds_in_feeds": 72, "agencies": {"agency-a": {"crm": 981, "listing": 662, "sales": 809}, "agency-b": {"crm": 981, "listing": 662, "sales": 809}}, "answer_key_rows": 4904}
@@ -37,15 +37,15 @@ measurement for agency-a against the answer key: 2452 records
   unit_unknown                   26         0           26       0      0
   unit_word                     143       143            0       0      0
 
-  contacts: 1666 mentions, pairwise precision 100.00% (728 of 728 merged pairs), recall 95.04% (728 of 766 true pairs)
+  contacts: 1666 mentions, pairwise precision 100.00% (523 of 523 merged pairs), recall 68.28% (523 of 766 true pairs)
   contact class                 mentions  resolved  missed  wrong  set aside
   contact_clean                     1048      1048       0      0          0
-  dup_new_email                       42        41       1      0          0
+  dup_new_email                       42         0      42      0          0
   dup_no_shared_id                    19         0      19      0          0
   email_case                          59        58       1      0          0
-  name_variant                        86        86       0      0          0
-  phone_format                        59        55       4      0          0
-  sales_buyer                        331       329       2      0          0
+  name_variant                        86        83       3      0          0
+  phone_format                        59         0      59      0          0
+  sales_buyer                        331       281      50      0          0
   same_name_different_person          22        22       0      0          0
 data quality for agency-a
   feed crm      stored   981  rejected   0  unchanged   0
@@ -56,8 +56,8 @@ data quality for agency-a
   links by rule: EXACT_KEY 2038, EXACT_LOT 37, LOT_GEOCODE 18, NEW_DERIVED 148, TRIGRAM 56 (postcode did not agree on 130)
   quarantine: BELOW_THRESHOLD/open 12, LOT_NO_GEOCODE/open 34, LOT_TOO_FAR/open 9, NUMBER_TRANSPOSED/open 31, UNIT_CONFLICT/open 69
   properties used: derived 49, gnaf 1638
-  contact mentions 1666 -> 1097 contacts (0 merged away, 0 set aside); no identifier 0, bad email 0, bad phone 25
-timings   ingest 1.52 s  normalise 1.56 s  match 7.13 s  contacts 5.85 s
+  contact mentions 1666 -> 1240 contacts (0 merged away, 0 set aside); no email or mobile 124 (a landline alone does not merge: 124), bad email 0, bad phone 25
+timings   ingest 21.93 s  normalise 6.95 s  match 56.72 s  contacts 24.61 s
 reconcile ok
 
 measurement for agency-b against the answer key: 2452 records
@@ -92,15 +92,15 @@ measurement for agency-b against the answer key: 2452 records
   unit_unknown                   40         0           40       0      0
   unit_word                     136       136            0       0      0
 
-  contacts: 1672 mentions, pairwise precision 100.00% (679 of 679 merged pairs), recall 92.89% (679 of 731 true pairs)
+  contacts: 1672 mentions, pairwise precision 100.00% (500 of 500 merged pairs), recall 68.40% (500 of 731 true pairs)
   contact class                 mentions  resolved  missed  wrong  set aside
   contact_clean                     1069      1069       0      0          0
-  dup_new_email                       36        36       0      0          0
+  dup_new_email                       36         0      36      0          0
   dup_no_shared_id                    27         0      27      0          0
   email_case                          59        58       1      0          0
-  name_variant                        95        94       1      0          0
-  phone_format                        50        48       2      0          0
-  sales_buyer                        316       306      10      0          0
+  name_variant                        95        86       9      0          0
+  phone_format                        50         0      50      0          0
+  sales_buyer                        316       272      44      0          0
   same_name_different_person          20        20       0      0          0
 data quality for agency-b
   feed crm      stored   981  rejected   0  unchanged   0
@@ -111,13 +111,13 @@ data quality for agency-b
   links by rule: EXACT_KEY 2008, EXACT_LOT 34, LOT_GEOCODE 8, NEW_DERIVED 133, TRIGRAM 67 (postcode did not agree on 136)
   quarantine: BELOW_THRESHOLD/open 19, LOT_NO_GEOCODE/open 39, LOT_TOO_FAR/open 3, NUMBER_TRANSPOSED/open 50, UNIT_CONFLICT/open 91
   properties used: derived 39, gnaf 1630
-  contact mentions 1672 -> 1129 contacts (0 merged away, 0 set aside); no identifier 3, bad email 0, bad phone 27
-timings   ingest 1.55 s  normalise 1.80 s  match 7.09 s  contacts 5.65 s
+  contact mentions 1672 -> 1253 contacts (0 merged away, 0 set aside); no email or mobile 114 (a landline alone does not merge: 111), bad email 0, bad phone 27
+timings   ingest 12.90 s  normalise 21.58 s  match 67.06 s  contacts 41.28 s
 reconcile ok
 
 both agencies: 4904 records, links made 4547 (resolved 4529, wrong 18), quarantined as expected 324, missed 33
   precision 99.60% (4529 of 4547)   recall 98.93% (4529 of 4578 that should link)   honest recall 92.35% (4529 of 4904, the 326 policy records counted as misses)
-gnaf load 0.74 s (9135 rows), reference build 0.29 s (4230 addresses)
+gnaf load 3.00 s (9135 rows), reference build 0.58 s (4230 addresses)
 
 == python tools/measure.py --seed-dir out/seed --sweep 0.4,0.5,0.6,0.7,0.8
 threshold  links  wrong  precision   recall   honest  missed  quarantined   (both agencies; honest = recall counting the policy records as misses)
@@ -161,15 +161,15 @@ measurement for agency-a against the answer key: 23370 records
   unit_unknown                  280         0          280       0      0
   unit_word                    1291      1291            0       0      0
 
-  contacts: 15884 mentions, pairwise precision 100.00% (6490 of 6490 merged pairs), recall 93.26% (6490 of 6959 true pairs)
+  contacts: 15884 mentions, pairwise precision 100.00% (4771 of 4771 merged pairs), recall 68.56% (4771 of 6959 true pairs)
   contact class                 mentions  resolved  missed  wrong  set aside
   contact_clean                    10149     10149       0      0          0
-  dup_new_email                      378       367      11      0          0
+  dup_new_email                      378         0     378      0          0
   dup_no_shared_id                   276         0     276      0          0
-  email_case                         547       527      20      0          0
-  name_variant                       823       823       0      0          0
-  phone_format                       440       424      16      0          0
-  sales_buyer                       3068      3029      39      0          0
+  email_case                         547       522      25      0          0
+  name_variant                       823       800      23      0          0
+  phone_format                       440         0     440      0          0
+  sales_buyer                       3068      2604     464      0          0
   same_name_different_person         203       203       0      0          0
 data quality for agency-a
   feed crm      stored  9348  rejected   0  unchanged   0
@@ -180,8 +180,8 @@ data quality for agency-a
   links by rule: EXACT_KEY 19134, EXACT_LOT 268, LOT_GEOCODE 93, NEW_DERIVED 1628, TRIGRAM 611 (postcode did not agree on 1342)
   quarantine: AMBIGUOUS_TIE/open 1, BELOW_THRESHOLD/open 85, LOCALITY_CONFLICT/open 2, LOT_NO_GEOCODE/open 373, LOT_TOO_FAR/open 32, NUMBER_TRANSPOSED/open 386, UNIT_CONFLICT/open 757
   properties used: derived 516, gnaf 15420
-  contact mentions 15884 -> 10709 contacts (12 merged away, 0 set aside); no identifier 8, bad email 0, bad phone 186
-timings   ingest 13.93 s  normalise 16.29 s  match 94.16 s  contacts 109.25 s
+  contact mentions 15884 -> 11937 contacts (0 merged away, 0 set aside); no email or mobile 1096 (a landline alone does not merge: 1088), bad email 0, bad phone 186
+timings   ingest 98.09 s  normalise 108.36 s  match 386.34 s  contacts 162.45 s
 reconcile ok
 
 measurement for agency-b against the answer key: 23370 records
@@ -216,15 +216,15 @@ measurement for agency-b against the answer key: 23370 records
   unit_unknown                  303         0          303       0      0
   unit_word                    1278      1278            0       0      0
 
-  contacts: 15937 mentions, pairwise precision 100.00% (6592 of 6592 merged pairs), recall 93.94% (6592 of 7017 true pairs)
+  contacts: 15937 mentions, pairwise precision 100.00% (4830 of 4830 merged pairs), recall 68.83% (4830 of 7017 true pairs)
   contact class                 mentions  resolved  missed  wrong  set aside
   contact_clean                    10172     10172       0      0          0
-  dup_new_email                      385       379       6      0          0
+  dup_new_email                      385         0     385      0          0
   dup_no_shared_id                   250         0     250      0          0
-  email_case                         531       510      21      0          0
-  name_variant                       825       825       0      0          0
-  phone_format                       481       467      14      0          0
-  sales_buyer                       3099      3068      31      0          0
+  email_case                         531       507      24      0          0
+  name_variant                       825       792      33      0          0
+  phone_format                       481         0     481      0          0
+  sales_buyer                       3099      2671     428      0          0
   same_name_different_person         194       194       0      0          0
 data quality for agency-b
   feed crm      stored  9348  rejected   0  unchanged   0
@@ -235,10 +235,10 @@ data quality for agency-b
   links by rule: EXACT_KEY 19090, EXACT_LOT 323, LOT_GEOCODE 108, NEW_DERIVED 1612, TRIGRAM 615 (postcode did not agree on 1377)
   quarantine: AMBIGUOUS_TIE/open 9, BELOW_THRESHOLD/open 85, LOT_NO_GEOCODE/open 347, LOT_TOO_FAR/open 46, NUMBER_TRANSPOSED/open 385, UNIT_CONFLICT/open 750
   properties used: derived 492, gnaf 15312
-  contact mentions 15937 -> 10682 contacts (6 merged away, 0 set aside); no identifier 8, bad email 0, bad phone 198
-timings   ingest 14.30 s  normalise 16.32 s  match 108.30 s  contacts 68.11 s
+  contact mentions 15937 -> 11933 contacts (0 merged away, 0 set aside); no email or mobile 1093 (a landline alone does not merge: 1085), bad email 0, bad phone 198
+timings   ingest 62.31 s  normalise 62.87 s  match 390.91 s  contacts 228.42 s
 reconcile ok
 
 both agencies: 46740 records, links made 43482 (resolved 43444, wrong 38), quarantined as expected 2950, missed 308
   precision 99.91% (43444 of 43482)   recall 99.23% (43444 of 43779 that should link)   honest recall 92.95% (43444 of 46740, the 2961 policy records counted as misses)
-gnaf load 2.41 s (85781 rows), reference build 2.49 s (40295 addresses)
+gnaf load 3.51 s (85781 rows), reference build 7.15 s (40295 addresses)
