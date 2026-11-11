@@ -1,12 +1,14 @@
 """Start or remove the PostgreSQL 16 with PostGIS container the tests and the demo use.
 
-    python tools/pg.py up      start it (or reuse it) on port 5436 and wait until it accepts connections
+    python tools/pg.py up      start it (or reuse it) on port 5436 of this machine only (127.0.0.1) and wait until it accepts connections
     python tools/pg.py down    remove it
 
 The first `up` writes .env (git-ignored) with three random passwords, one per database role. parcelkey reads them from there or from the same environment variables.
+The port is published on 127.0.0.1 only, so nothing on the network can reach the database; a container an older version published on every interface is replaced.
 """
 from __future__ import annotations
 
+import json
 import secrets
 import subprocess
 import sys
@@ -20,6 +22,7 @@ ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 VARS = ("PARCELKEY_ADMIN_PASSWORD", "PARCELKEY_OWNER_PASSWORD", "PARCELKEY_APP_PASSWORD")
 
 
+PUBLISH = f"127.0.0.1:{PORT}:5432"          # the host address is part of the mapping: without it Docker publishes on every interface
 PULL_TIMEOUT = 1800          # seconds; the first run downloads the image, which can take a while on a slow link
 
 
@@ -40,6 +43,20 @@ def _read_env() -> dict[str, str]:
     return out
 
 
+def published_beyond_loopback() -> bool:
+    """True when the container publishes a port on anything but 127.0.0.1 (an older version of this tool published on every interface)."""
+    out = _docker("inspect", "-f", "{{json .HostConfig.PortBindings}}", NAME)
+    if out.returncode != 0:
+        return False
+    try:
+        bindings = json.loads(out.stdout or "{}")
+    except ValueError:
+        return False
+    if not isinstance(bindings, dict):
+        return False
+    return any(b.get("HostIp", "") != "127.0.0.1" for published in bindings.values() for b in (published or []))
+
+
 def ensure_env() -> dict[str, str]:
     env = _read_env()
     if all(env.get(v) for v in VARS):
@@ -56,13 +73,17 @@ def up(timeout: float = 120.0) -> None:
     if state.returncode == 0 and not had_env:
         _docker("rm", "-f", "-v", NAME)                  # a container whose password this checkout does not know is replaced
         state = _docker("inspect", "-f", "{{.State.Running}}", NAME)
+    if state.returncode == 0 and published_beyond_loopback():
+        print(f"replacing {NAME}: it was published on every network interface, it is now published on 127.0.0.1 only", flush=True)
+        _docker("rm", "-f", "-v", NAME)
+        state = _docker("inspect", "-f", "{{.State.Running}}", NAME)
     if state.returncode != 0:
         if _docker("image", "inspect", IMAGE).returncode != 0:
             print(f"pulling {IMAGE} (first run only, it can take a few minutes)", flush=True)
             pull = _docker("pull", IMAGE, timeout=PULL_TIMEOUT)
             if pull.returncode != 0:
                 raise SystemExit(f"docker pull failed: {pull.stderr.strip()}")
-        run = _docker("run", "-d", "--name", NAME, "-e", f"POSTGRES_PASSWORD={env['PARCELKEY_ADMIN_PASSWORD']}", "-e", "POSTGRES_DB=parcelkey", "-p", f"{PORT}:5432", IMAGE)
+        run = _docker("run", "-d", "--name", NAME, "-e", f"POSTGRES_PASSWORD={env['PARCELKEY_ADMIN_PASSWORD']}", "-e", "POSTGRES_DB=parcelkey", "-p", PUBLISH, IMAGE)
         if run.returncode != 0:
             raise SystemExit(f"docker run failed: {run.stderr.strip()}")
     elif state.stdout.strip() != "true":
