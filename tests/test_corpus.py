@@ -72,7 +72,8 @@ def test_the_corpus_is_well_formed_and_big_enough():
     undisputed = [c for c in CASES if key(c) not in DISPUTES]
     assert sum(c["expect"] == "pass" for c in undisputed) >= 30 and sum(c["expect"] == "fail" for c in undisputed) >= 30
     for c in CASES:
-        assert set(c) == {"input", "expect", "why", "source"} and set(c["input"]) == {"line", "suburb", "state", "postcode"}
+        assert set(c) - {"promise"} == {"input", "expect", "why", "source"} and set(c["input"]) == {"line", "suburb", "state", "postcode"}
+        assert "promise" not in c or (c["source"] == "invented" and len(c["promise"]) >= 10)       # an invented case says what the product promises for it
         assert c["expect"] in ("pass", "fail") and c["source"] in ("real", "invented") and len(c["why"]) >= 10
     assert len({key(c) for c in CASES}) == len(CASES)
     assert set(DISPUTES) <= {key(c) for c in CASES}
