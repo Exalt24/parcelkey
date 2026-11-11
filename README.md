@@ -100,31 +100,20 @@ What the suites cover, the planted bugs and how the mutation check works are in 
 
 ## What was hard
 
-- **A first measurement that was too good.** The first run gave 100.00% precision at every threshold, because the generated street names were far apart and a typo never had a rival. I added look-alike streets in one suburb (Harwick Street beside Hardwick Street) and addresses missing from the file. Precision fell to the numbers above and showed the real failure: a new address whose street is one letter from an existing street gets merged into that street's number. No threshold below 0.80 fixes it.
-
-The other seven, among them a wider street type list that broke ordinary suburbs and a suffix that made a coin flip, are in [docs/what-was-hard.md](docs/what-was-hard.md).
+The first measurement was too good: 100.00% precision at every threshold, because the generated street names were far apart. Look-alike streets showed the real failure, a new address one letter from an existing street merging into it. The eight things that were hard are in [docs/what-was-hard.md](docs/what-was-hard.md).
 
 ## Limits
 
-- The data is made up. The addresses are in the public G-NAF table layout and are not G-NAF. Names are built from syllables and common given names, emails are on `example.com`, phones are landline numbers in the 5550 range ACMA reserves for fiction, so no generated phone number merges contacts.
-- The loader for real G-NAF files was only run on files that `scripts/seed.py` wrote in the same layout. It has not read a real Geoscape release. File names, the pipe delimiter and the header row come from Geoscape's unpacking guide, column types from the Data Product Description. Real files may differ in ways those pages do not say.
-- Ten tables of a real release are modelled: STATE, LOCALITY, STREET_LOCALITY, ADDRESS_DETAIL, ADDRESS_ALIAS, PRIMARY_SECONDARY, ADDRESS_DEFAULT_GEOCODE and the three authority code tables. ADDRESS_SITE, ADDRESS_FEATURE, mesh blocks and the rest are skipped and reported. An address with no street is left out of the flat reference. PRIMARY_SECONDARY is loaded and the matcher does not use it.
-- There are no parcels. `legal_parcel_id` is loaded from ADDRESS_DETAIL and nothing reads it: no parcel boundaries, no cadastre, and no roll up from addresses to parcels.
-- How match time grows with the record count is not settled: in the final run, which shared the machine with another heavy job, ten times the records took 5.8 to 6.8 times as long to match, and an earlier run on a quiet machine read a larger factor (see the ten times run). Nothing near the real file's 15 million addresses has been tried.
-- English style addresses only. A PO Box, GPO Box, Locked Bag or Private Bag is set aside as POSTAL_ADDRESS, also when a street comes with it. Other mailbox forms are not recognised: Post Office Box written out, Private Mail Bag, CMB and Roadside Mailbox have no street and are set aside as UNPARSEABLE, while `RMB 5 Smith Rd` and `Parcel Locker 12 Smith St` are read as that street address. Rural and intersection addresses have no street number and are set aside as unparseable. A street suffix is read only straight after a street type, and with no comma and no suburb field it is read as part of the suburb. There are no suburb typos (the suburb must agree exactly), so a misspelt suburb written with no postcode mints a second derived id for an address G-NAF lists, and with its postcode it is set aside as LOCALITY_CONFLICT; and there is no postcode inference; only an NT postcode gets its lost zero back. A postcode fills a blank state only in a derived property's key. `4 A St Ingowick Street` is number 4A, so `5 O Connell Street` is read as 5O.
-- A flat that G-NAF does not list stays in quarantine as UNIT_CONFLICT with no master id until a later release lists it, whatever the feeds say: the unit rule cannot be switched off, and a new or unlisted flat is the price of it (the unit_unknown and tower_no_unit_noparent classes in [docs/results.md](docs/results.md)).
-- Only 15 of G-NAF's 53 flat types are kept apart from a unit (a carspace, a garage, a shed and the like); a feed word is read for 14 of them (Marine Berth is two words and is not read), so `Marine Berth 3` reads as a plain unit. `Shop 3` and `Unit 3` in one building read as one unit. `L3/12` is read as level 3 of number 12, where it could be a flat called L3.
-- No licensed property data is used or imitated: nothing from CoreLogic, Domain, REA or Pricefinder.
-- A lot only record with a point near a numbered address that carries the same lot links to that address by LOT_GEOCODE even when it is a flat, because the lot belongs to the building.
-- A near miss street name is a similarity score, not knowledge. A new address whose street is close to an existing one can merge into it, and a genuine new address whose number is a digit swap of a neighbour's is set aside. Both show in the measured misses and wrong links.
-- Only a shared email or mobile number merges contacts. A landline never merges anyone, so a person who gives only a landline is a new contact every time; a mobile shared by two real people merges them, and the cluster cap limits the damage. Two mentions of one person with no shared email or mobile stay two contacts, by design.
-- A record that changes after loading is rejected as CHANGED_AFTER_LOAD, not applied. `reconcile --feeds` reports it as FILE_NOT_APPLIED and `freshness` counts the rejected rows, and none of these moves the feed's age: the same bytes again, a file whose rows are all unchanged and a file whose rows are all rejected leave it as it was.
-- `freshness` expects all three feeds. An agency that sends fewer sees the missing ones as MISSING and exit 1; `--max-age` changes a limit and cannot drop a source.
-- The master property list is shared by every agency and holds addresses only. An agency's own address that is not in G-NAF becomes a derived row other agencies can read, with the display address and the point of the first record that made it. Everything that says who holds a record is agency scoped. The caller names the agency for each transaction and one database role serves every agency, so row level security keeps a transaction to the agency it named and does not stop a caller that names another.
-- A new address written with and without a street suffix links to one derived property, and the first form seen names its id, so which key a property carries depends on which feed arrived first.
-- A G-NAF reload is an upsert: a changed column and a new retired date are written and counted, a pid the new file leaves out stays, and properties already made for a pid the release has since retired are counted and left as they are, nothing merged or rewritten.
-- A derived id stays derived after its address reaches G-NAF. `reconcile` lists those properties as SUPERSEDED and a person decides what to merge. The G-NAF id hashes ADDRESS_DETAIL_PID, and ADDRESS_FEATURE, which tracks a pid across releases, is not modelled, so a re-issued pid gives a new id.
-- Nothing is deployed. One machine, one database, no TLS, no scheduler, no web app.
+- The data is made up and in the public G-NAF layout, so it is not G-NAF. The loader has never read a real Geoscape release, and nothing near its 15 million addresses has been tried.
+- English style addresses only. Other mailbox forms (Post Office Box written out, Private Mail Bag, CMB) are set aside as UNPARSEABLE, while `RMB 5 Smith Rd` is read as that street address. There are no suburb typos, so a misspelt suburb written with no postcode mints a second derived id.
+- A lot only record can link to a flat that carries the same lot by LOT_GEOCODE, because the lot belongs to the building.
+- A landline never merges contacts; only a shared email or mobile number does.
+- A record changed after loading is rejected as CHANGED_AFTER_LOAD and `reconcile --feeds` reports it as FILE_NOT_APPLIED. `freshness` expects all three feeds and reports a missing one as MISSING.
+- A G-NAF reload is an upsert: a pid the new file leaves out stays, and properties made for a retired pid are left as they are.
+- A new address written with and without a street suffix links to one derived property, and the first form seen names its id.
+- Nothing is deployed: one machine, one database, no TLS, no scheduler, no web app.
+
+Every limit, with the ones above in full, is in [docs/limits.md](docs/limits.md).
 
 ## Stack
 
