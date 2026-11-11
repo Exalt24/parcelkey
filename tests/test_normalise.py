@@ -676,3 +676,21 @@ def test_the_rules_for_a_kept_type_or_suffix_fire_only_when_one_was_kept():
     for text, rule in (("Carspace 12, 40 Smith St", "FLAT_TYPE_KEPT"), ("Basement 1, 40 Smith St", "LEVEL_TYPE_KEPT"), ("12 Smith St North", "STREET_SUFFIX_KEPT")):
         assert rule in normalise_address(text, *FAKE).rules
         assert rule not in normalise_address(text.replace("Carspace", "Unit").replace("Basement", "Level").replace(" North", ""), *FAKE).rules
+
+
+# ---- the suffix rule helpers the derived property search uses (P5-10) ------------------------------------------------------------------------------------
+
+def test_without_suffix_drops_a_street_suffix_and_nothing_else():
+    north = normalise_address("Unit 3, 7 Newbuild Street North", "Fakeville", "NSW", "2000")
+    bare = normalise_address("Unit 3, 7 Newbuild Street", "Fakeville", "NSW", "2000")
+    assert north.street_suffix == "NORTH" and north.without_suffix().street_suffix == "" and north.without_suffix().street_type == "STREET"
+    assert north.without_suffix().canon_key == bare.canon_key and north.without_suffix() == bare
+    assert bare.without_suffix() is bare
+    assert north.canon_key != bare.canon_key
+
+
+def test_is_street_suffix_accepts_every_suffix_name_and_nothing_else():
+    from parcelkey.normalise import STREET_SUFFIXES, is_street_suffix
+    assert STREET_SUFFIXES and all(is_street_suffix(name) for name in STREET_SUFFIXES.values())
+    for text in ("", "STREET", "GARDENS", "north", "NORTHX", " NORTH", "SMITH"):
+        assert not is_street_suffix(text), text

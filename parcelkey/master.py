@@ -6,6 +6,10 @@ A property id is derived, never taken from a sequence, so for one G-NAF release 
 The canonical key leaves the postcode out (see `Addr.canon_key`), so a feed that drops or mistypes it cannot mint a second id for one address, and it takes a blank state from the
 postcode's range, so a feed that leaves the state column empty cannot either (with neither state nor postcode the key keeps a blank state).
 
+A derived address is also matched the way an address is matched against G-NAF: a street suffix on one side only is not a conflict (`derived_twins`). `7 Newbuild Street North` and
+`7 Newbuild Street` are one new address, `North` and `South` are two. The first form seen names the id and a later form of the same address links to it, so which of two keys a property
+carries depends on which arrived first; the id of a property is never changed after it was made.
+
 What this does not cover: the id hashes ADDRESS_DETAIL_PID. ADDRESS_FEATURE, which tracks a pid across releases, is not modelled, so a pid that a later release re-issues for the
 same address gives a new id. A derived id also stays derived after its address reaches G-NAF: `reconcile` lists it as SUPERSEDED and a person decides what to merge.
 """
@@ -15,7 +19,7 @@ import hashlib
 
 import psycopg
 
-from .normalise import Addr
+from .normalise import Addr, is_street_suffix
 
 
 def _digest(kind: str, value: str) -> str:
@@ -28,6 +32,23 @@ def property_id_for_gnaf(address_detail_pid: str) -> str:
 
 def property_id_for_derived(canon_key: str) -> str:
     return f"pk_d_{_digest('derived', canon_key)}"
+
+
+def _like(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def derived_twins(cur: psycopg.Cursor, addr: Addr) -> list[tuple[str, str]]:
+    """Derived properties (property id, canonical key) that are this address under the suffix rule used against G-NAF: a suffix on one side only is not a conflict, two different suffixes are.
+    An address with a suffix has at most one twin, the property for the same address without it; an address without one has a twin for the same address with any suffix. Sorted by id."""
+    if addr.street_suffix:
+        bare = addr.without_suffix().canon_key
+        return cur.execute("SELECT property_id, canon_key FROM property WHERE origin = 'derived' AND property_id = %s", (property_id_for_derived(bare),)).fetchall()
+    fields = addr.canon_key.split("|")
+    street = fields[4]
+    pattern = "|".join([*(_like(f) for f in fields[:4]), _like(street) + " %", *(_like(f) for f in fields[5:])])
+    found = cur.execute("SELECT property_id, canon_key FROM property WHERE origin = 'derived' AND canon_key LIKE %s ORDER BY property_id", (pattern,)).fetchall()
+    return [(pid, key) for pid, key in found if is_street_suffix(key.split("|")[4][len(street) + 1:])]
 
 
 def ensure_gnaf_property(cur: psycopg.Cursor, pid: str) -> tuple[str, bool]:

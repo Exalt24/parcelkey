@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .gnaf_codes import FLAT_TYPES, LEVEL_TYPES, STREET_SUFFIXES, STREET_TYPES
 
@@ -103,6 +103,11 @@ _PLAN = re.compile(r"(?<![A-Z0-9])(LOT\s+\d+[A-Z]?)(?:[\s,]+ON(?![A-Z0-9]))?(?:[
 _CAR_WORD = re.compile(r"(?<![A-Z0-9])CAR[ \-](SPACE|PARK)(?= +(?:[A-Z]{0,2}\d|[A-Z]\b))")          # Car Space 12 and Car Park 3 are Carspace and Carpark
 
 
+def is_street_suffix(text: str) -> bool:
+    """True when `text` is a street suffix name as `Addr.street_suffix` reads one (`NORTH`, `SOUTH WEST`)."""
+    return text in _SUFFIX_NAMES
+
+
 @dataclass(frozen=True)
 class Addr:
     """One address in normalised parts. `rules` is not part of equality: two spellings of one address compare equal."""
@@ -127,6 +132,11 @@ class Addr:
     def street_suffix(self) -> str:
         """The street suffix kept after the street type (NORTH in `STREET NORTH`), or an empty string. Two streets that differ only here are two streets."""
         return max((n for n in _SUFFIX_NAMES if f" {self.street_type}".endswith(f" {n}")), key=len, default="")
+
+    def without_suffix(self) -> "Addr":
+        """The same address with the street suffix left out (`STREET` for `STREET NORTH`), or this address when it has none."""
+        suffix = self.street_suffix
+        return replace(self, street_type=self.street_type[: len(self.street_type) - len(suffix)].strip()) if suffix else self
 
     @property
     def street_base(self) -> str:

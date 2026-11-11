@@ -8,6 +8,8 @@ Order of the rules:
   3. LOT rules      a record with a lot and no street number: an address that is only a lot links by EXACT_LOT; a numbered address that carries the same lot links
                     only when the record has a geocode within `lot_distance_m` (LOT_GEOCODE, ST_Distance on geography); otherwise it is set aside.
   4. NEW_DERIVED    nothing in the reference is near: a property is made with an id derived from the canonical key, unless the record has no suburb (NO_LOCALITY: set aside).
+                    Before one is made the derived properties are searched under the same suffix rule (`master.derived_twins`): the same new address written with and without a street suffix
+                    is one property (DERIVED_SUFFIX), and a record with no suffix that two derived properties with different suffixes could be is set aside as AMBIGUOUS_TIE.
 
 Two hard rules sit above all of these and cannot be configured away:
   * a different unit or flat number never matches (`units_conflict`), even when the street and number are equal; a record with a level takes the candidate with that level, and a record with
@@ -26,7 +28,7 @@ from psycopg.types.json import Jsonb
 
 from . import block
 from .block import Candidate
-from .master import ensure_derived_property, ensure_gnaf_property
+from .master import derived_twins, ensure_derived_property, ensure_gnaf_property
 from .normalise import Addr
 
 
@@ -43,7 +45,7 @@ class MatchConfig:
 
 @dataclass(frozen=True)
 class Decision:
-    outcome: str                   # link | new | quarantine
+    outcome: str                   # link | new | quarantine | twin (a new address that is an existing derived property under the suffix rule; `pid` is that property's id)
     rule: str
     score: float = 0.0
     pid: str = ""
@@ -208,6 +210,8 @@ def match_pending(cur: psycopg.Cursor, agency: str, cfg: MatchConfig = MatchConf
                         locality=row[11], state=row[12], postcode=row[13])
             lat, lon = row[14], row[15]
             dec = decide(addr, lat, lon, cands.get(record_id, []), cfg) if status == "ok" else _unusable(norm_rules)
+            if dec.outcome == "new":
+                dec = _through_derived(cur, addr, dec)
             counts.records += 1
             if dec.outcome == "quarantine":
                 _quarantine(cur, agency, record_id, dec)
@@ -215,6 +219,8 @@ def match_pending(cur: psycopg.Cursor, agency: str, cfg: MatchConfig = MatchConf
                 continue
             if dec.outcome == "new":
                 property_id, added = ensure_derived_property(cur, addr, lat, lon)
+            elif dec.outcome == "twin":
+                property_id, added = dec.pid, False
             else:
                 property_id, added = ensure_gnaf_property(cur, dec.pid)
             counts.new_properties += int(added)
@@ -223,6 +229,16 @@ def match_pending(cur: psycopg.Cursor, agency: str, cfg: MatchConfig = MatchConf
             cur.execute("""UPDATE quarantine SET status = 'resolved', resolved_at = now() WHERE agency_id = %s AND record_id = %s AND status = 'open'""", (agency, record_id))
             counts.linked[dec.rule] = counts.linked.get(dec.rule, 0) + 1
     return counts
+
+
+def _through_derived(cur: psycopg.Cursor, addr: Addr, dec: Decision) -> Decision:
+    """A new address first looks for a derived property it is under the suffix rule: one means link to it, two (a record with no suffix, `North` and `South` both made) means a tie."""
+    twins = derived_twins(cur, addr)
+    if len(twins) > 1:
+        return _set_aside("AMBIGUOUS_TIE", {"derived_properties": [{"property_id": pid, "key": key} for pid, key in twins[:5]]})
+    if twins:
+        return Decision("twin", "DERIVED_SUFFIX", 1.0, twins[0][0])
+    return dec
 
 
 def _unusable(norm_rules: list[str]) -> Decision:

@@ -415,3 +415,89 @@ def test_class_a_floor_is_not_the_building_when_the_reference_holds_both(hand, c
     d = run_crm(conn, admin, tmp_path, [h.crm(f"C{i}", t, suburb="Melbourne", state="VIC", postcode="3000") for i, t in enumerate(texts)])
     got = {t: d[f"crm:C{i}"][2] if d[f"crm:C{i}"][0] == "link" else d[f"crm:C{i}"] for i, t in enumerate(texts)}
     assert got == texts
+
+
+# ---- a new address written with and without a street suffix is one property (P5-10) -----------------------------------------------------------------
+
+BARE, NORTH, SOUTH = "7 Newbuild Street", "7 Newbuild Street North", "7 Newbuild Street South"
+
+
+def derived_state(admin):
+    keys = [r[0] for r in admin.execute("select canon_key from property where origin = 'derived' order by 1").fetchall()]
+    return keys
+
+
+def test_class_a_new_address_with_and_without_a_street_suffix_is_one_property_and_two_suffixes_are_two(hand, conn, admin, tmp_path):
+    """CLASS-TABLE (P5-10): the derived key matched on the exact key only, so `7 Newbuild Street North` and `7 Newbuild Street` minted two ids. The suffix rule used against G-NAF now applies: a suffix on
+    one side only is no conflict, two different suffixes are. Each case gives the spellings in arrival order, the rule each got (None for a quarantined one), and how many derived properties exist after."""
+    hand([A("G1", "1", street="OTHER")])
+    table = {
+        "suffix then none": ([NORTH, BARE], ["NEW_DERIVED", "DERIVED_SUFFIX"], 1),
+        "none then suffix": ([BARE, NORTH], ["NEW_DERIVED", "DERIVED_SUFFIX"], 1),
+        "the same suffix twice": ([NORTH, NORTH], ["NEW_DERIVED", "NEW_DERIVED"], 1),
+        "none twice": ([BARE, BARE], ["NEW_DERIVED", "NEW_DERIVED"], 1),
+        "north then south": ([NORTH, SOUTH], ["NEW_DERIVED", "NEW_DERIVED"], 2),
+        "north and south then none": ([NORTH, SOUTH, BARE], ["NEW_DERIVED", "NEW_DERIVED", None], 2),
+        "none then north then south": ([BARE, NORTH, SOUTH], ["NEW_DERIVED", "DERIVED_SUFFIX", "DERIVED_SUFFIX"], 1),
+        "another number": ([NORTH, "8 Newbuild Street"], ["NEW_DERIVED", "NEW_DERIVED"], 2),
+        "another unit": (["Unit 1, " + NORTH, "Unit 2, " + BARE], ["NEW_DERIVED", "NEW_DERIVED"], 2),
+        "another street": ([NORTH, "7 Newbuilt Street"], ["NEW_DERIVED", "NEW_DERIVED"], 2),
+        "a range of numbers": (["7-9 Newbuild Street North", "7-9 Newbuild Street"], ["NEW_DERIVED", "DERIVED_SUFFIX"], 1),
+        "a level": (["Level 2, 7 Newbuild Street North", "Level 2, 7 Newbuild Street"], ["NEW_DERIVED", "DERIVED_SUFFIX"], 1),
+    }
+    for name, (spellings, rules, properties) in table.items():
+        db.wipe(db.default_admin_dsn())
+        got = run_crm(conn, admin, tmp_path, [h.crm(f"C{i}", s) for i, s in enumerate(spellings)])
+        assert [got[f"crm:C{i}"][1] if got[f"crm:C{i}"][0] == "link" else None for i in range(len(spellings))] == rules, name
+        assert len(derived_state(admin)) == properties, name
+        if None in rules:
+            assert got[f"crm:C{rules.index(None)}"] == ("quarantine", "AMBIGUOUS_TIE"), name
+
+
+def test_a_suffix_twin_links_to_the_first_property_and_keeps_its_id(hand, conn, admin, tmp_path):
+    hand([A("G1", "1", street="OTHER")])
+    got = run_crm(conn, admin, tmp_path, [h.crm("C0", NORTH), h.crm("C1", BARE)])
+    first = property_id_for_derived("|||7|NEWBUILD STREET NORTH|FAKEVILLE|NSW")
+    assert admin.execute("select property_id from property_link order by record_id").fetchall() == [(first,), (first,)]
+    assert admin.execute("select rule, score from property_link where record_id = 'crm:C1'").fetchone() == ("DERIVED_SUFFIX", 1.0)
+    assert got["crm:C1"][1] == "DERIVED_SUFFIX" and admin.execute("select count(*) from property").fetchone()[0] == 1
+
+
+def test_a_tie_between_two_suffixed_properties_names_both_of_them(hand, conn, admin, tmp_path):
+    hand([A("G1", "1", street="OTHER")])
+    run_crm(conn, admin, tmp_path, [h.crm("C0", NORTH), h.crm("C1", SOUTH), h.crm("C2", BARE)])
+    detail = admin.execute("select detail from quarantine where record_id = 'crm:C2'").fetchone()[0]
+    assert sorted(d["key"] for d in detail["derived_properties"]) == ["|||7|NEWBUILD STREET NORTH|FAKEVILLE|NSW", "|||7|NEWBUILD STREET SOUTH|FAKEVILLE|NSW"]
+    assert {d["property_id"] for d in detail["derived_properties"]} == {property_id_for_derived("|||7|NEWBUILD STREET NORTH|FAKEVILLE|NSW"), property_id_for_derived("|||7|NEWBUILD STREET SOUTH|FAKEVILLE|NSW")}
+
+
+def test_the_suffix_rule_crosses_agencies_the_way_the_exact_key_does(hand, conn, admin, tmp_path):
+    hand([A("G1", "1", street="OTHER")])
+    run_crm(conn, admin, tmp_path, [h.crm("C0", NORTH)])
+    run_crm(conn, admin, tmp_path, [h.crm("C0", BARE)], agency=OTHER)
+    assert admin.execute("select count(distinct property_id) from property_link").fetchone()[0] == 1
+    assert admin.execute("select agency_id, rule from property_link order by agency_id").fetchall() == [(AGENCY, "NEW_DERIVED"), (OTHER, "DERIVED_SUFFIX")]
+
+
+def test_a_derived_twin_in_another_suburb_or_state_is_not_a_twin(hand, conn, admin, tmp_path):
+    hand([A("G1", "1", street="OTHER")])
+    rows = [h.crm("C0", NORTH), h.crm("C1", BARE, suburb="Otherville"), h.crm("C2", BARE, state="VIC", postcode="3000")]
+    got = run_crm(conn, admin, tmp_path, rows)
+    assert [got[f"crm:C{i}"][1] for i in range(3)] == ["NEW_DERIVED"] * 3 and len(derived_state(admin)) == 3
+
+
+def test_a_reconcile_of_a_run_with_suffix_twins_is_clean(hand, conn, admin, tmp_path):
+    from parcelkey.reconcile import reconcile
+    hand([A("G1", "1", street="OTHER")])
+    run_crm(conn, admin, tmp_path, [h.crm("C0", NORTH), h.crm("C1", BARE), h.crm("C2", SOUTH)])
+    with db.agency_tx(conn, AGENCY) as cur:
+        res = reconcile(cur, AGENCY)
+    assert res.ok, [str(f) for f in res.findings]
+
+
+def test_the_suffix_search_matches_a_suffix_name_and_not_a_longer_street_name(hand, conn, admin, tmp_path):
+    """`7 Newbuild Street` must not pick up `7 Newbuild Street Gardens`: only a real suffix name after the street key makes a twin."""
+    hand([A("G1", "1", street="OTHER")])
+    run_crm(conn, admin, tmp_path, [h.crm("C0", "7 Newbuild Street Gardens")])
+    got = run_crm(conn, admin, tmp_path, [h.crm("C1", BARE)])
+    assert got["crm:C1"][1] == "NEW_DERIVED" and len(derived_state(admin)) == 2
