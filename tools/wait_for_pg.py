@@ -17,7 +17,7 @@ def main() -> int:
     last = ""
     while time.monotonic() < end:
         try:
-            with psycopg.connect(host=os.environ.get("PARCELKEY_PG_HOST", "localhost"), port=int(os.environ.get("PARCELKEY_PG_PORT", "5436")), dbname="parcelkey",
+            with psycopg.connect(host=os.environ.get("PARCELKEY_PG_HOST", "127.0.0.1"), port=int(os.environ.get("PARCELKEY_PG_PORT", "5436")), dbname="parcelkey",
                                  user="postgres", password=os.environ["PARCELKEY_ADMIN_PASSWORD"], connect_timeout=3) as conn:
                 if conn.execute("select 1").fetchone() == (1,):
                     print("postgres answers")

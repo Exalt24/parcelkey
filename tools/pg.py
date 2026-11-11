@@ -106,7 +106,7 @@ if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "up"
     if cmd == "up":
         up()
-        print(f"{NAME} ready on localhost:{PORT}")
+        print(f"{NAME} ready on 127.0.0.1:{PORT}")
     elif cmd == "down":
         down()
         print(f"{NAME} removed")

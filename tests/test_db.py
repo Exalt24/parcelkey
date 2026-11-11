@@ -133,7 +133,7 @@ def test_connection_strings(monkeypatch):
     monkeypatch.setenv("PARCELKEY_ADMIN_PASSWORD", "b")
     monkeypatch.setenv("PARCELKEY_OWNER_PASSWORD", "c")
     app = conninfo_to_dict(db.default_dsn())
-    assert (app["host"], app["port"], app["dbname"], app["user"], app["password"]) == ("localhost", "5436", "parcelkey", "parcelkey_app", "a")
+    assert (app["host"], app["port"], app["dbname"], app["user"], app["password"]) == ("127.0.0.1", "5436", "parcelkey", "parcelkey_app", "a")
     adm = conninfo_to_dict(db.default_admin_dsn())
     assert (adm["user"], adm["password"]) == ("postgres", "b")
     own = conninfo_to_dict(db.default_owner_dsn())
@@ -192,7 +192,7 @@ def test_a_safe_connection_is_returned_open_and_idle(conn):
 
 # ---- the tests and the measure script never touch the demo database --------------------------------------------------------------------------------
 
-DEMO_DSN = "host=localhost port=5436 dbname=parcelkey user=postgres password=x"
+DEMO_DSN = "host=127.0.0.1 port=5436 dbname=parcelkey user=postgres password=x"
 NOWHERE_DSN = "host=nowhere.invalid port=1 dbname={name} user=postgres password=x connect_timeout=1"
 
 

@@ -23,6 +23,7 @@ SCHEMA = "parcelkey"
 APP_ROLE = "parcelkey_app"
 OWNER_ROLE = "parcelkey_owner"
 DEFAULT_PORT = 5436
+DEFAULT_HOST = "127.0.0.1"                # not "localhost": the container is published on 127.0.0.1 only and a name that tries ::1 first waits out the whole connect timeout before it falls back
 DEMO_DB = "parcelkey"                     # the database the README's Run it steps fill: the CLI uses it, the tests and tools/measure.py never do
 TEST_DB = "parcelkey_test"                # what pytest empties and refills
 MEASURE_DB = "parcelkey_measure"          # what tools/measure.py empties and refills
@@ -77,7 +78,7 @@ def retarget(dsn: str, **changes: str) -> str:
 
 
 def _base(user: str, pw: str) -> str:
-    return make_conninfo(host=os.environ.get("PARCELKEY_PG_HOST", "localhost"), port=os.environ.get("PARCELKEY_PG_PORT", str(DEFAULT_PORT)),
+    return make_conninfo(host=os.environ.get("PARCELKEY_PG_HOST", DEFAULT_HOST), port=os.environ.get("PARCELKEY_PG_PORT", str(DEFAULT_PORT)),
                          dbname=os.environ.get("PARCELKEY_PG_DB", DEMO_DB), user=user, password=pw)
 
 
