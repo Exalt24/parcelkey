@@ -108,8 +108,9 @@ GUARDS = {
     "reconcile_accounting_check_removed": ("parcelkey/reconcile.py", "    if neither:", "    if False:", ["tests/test_reconcile.py"]),
     "reconcile_one_id_check_removed": ("parcelkey/reconcile.py", "        if expected != property_id:", "        if False:", ["tests/test_reconcile.py"]),
     "contact_cap_removed": ("parcelkey/contacts.py", "if _cluster_size(cur, agency, ids) + 1 > max_cluster:", "if False:", ["tests/test_contacts.py"]),
-    "contact_merge_on_name": ("parcelkey/contacts.py", "        idents = [(k, v) for k, v in ((\"email\", email), (\"phone\", phone)) if v]", "        idents = [(k, v) for k, v in ((\"email\", email), (\"phone\", phone), (\"name\", name)) if v]", ["tests/test_contacts.py"]),
-    "freshness_never_stale": ("parcelkey/freshness.py", '"STALE" if age > max_age[source] else "FRESH"', '"FRESH"', ["tests/test_freshness.py"]),
+    "contact_merge_on_name": ("parcelkey/contacts.py", '        idents = [(k, v) for k, v in (("email", email), ("phone", phone if is_mobile(phone) else "")) if v]', '        idents = [(k, v) for k, v in (("email", email), ("phone", phone if is_mobile(phone) else ""), ("name", name)) if v]', ["tests/test_contacts.py"]),
+    "contact_merge_on_landline": ("parcelkey/contacts.py", '("phone", phone if is_mobile(phone) else "")', '("phone", phone)', ["tests/test_contacts.py"]),
+    "freshness_never_stale": ("parcelkey/freshness.py", '"STALE" if age > max_age[source] else ("REJECTED" if rejected else "FRESH")', '"FRESH"', ["tests/test_freshness.py"]),
     "freshness_missing_is_fine": ("parcelkey/freshness.py", 'return 1 if any(r.status != "FRESH" for r in rows) else 0', 'return 1 if any(r.status == "STALE" for r in rows) else 0', ["tests/test_freshness.py"]),
 }
 
