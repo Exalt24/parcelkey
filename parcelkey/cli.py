@@ -41,7 +41,7 @@ def cmd_load_gnaf(a: argparse.Namespace) -> int:
     with psycopg.connect(db.default_admin_dsn()) as conn:
         conn.execute(f"SET search_path = {db.SCHEMA}, public")
         report = gnaf.load_gnaf(conn, Path(a.directory))
-        print(f"loaded {report.files} files, {report.rows_read} rows read, {report.rows_inserted} new rows")
+        print(f"loaded {report.files} files, {report.rows_read} rows read, {report.rows_inserted} new rows, {report.rows_changed} changed rows ({report.rows_retired} of them newly retired)")
         for name, cols in sorted(report.ignored_columns.items()):
             print(f"  {name}: columns not modelled here, skipped: {', '.join(cols)}")
         if report.skipped_files:
@@ -50,6 +50,8 @@ def cmd_load_gnaf(a: argparse.Namespace) -> int:
             built = gnaf.build_reference(conn)
             print(f"reference table built: {built['addresses']} addresses and {built['aliases']} alias spellings "
                   f"({built['skipped_no_street']} without a street left out, {built['skipped_alias_without_principal']} aliases without a principal left out)")
+            props = gnaf.refresh_properties(conn)
+            print(f"master properties: {props['refreshed']} refreshed from the new reference, {props['retired']} point at a G-NAF address the reference no longer has (left as they are)")
     return 0
 
 

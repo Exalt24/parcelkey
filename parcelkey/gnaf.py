@@ -6,6 +6,10 @@ not modelled here is skipped and reported. Nothing is guessed: a value that does
 
 This loader was only run on files written by scripts/seed.py in the same layout. It has not read a real Geoscape release.
 
+A reload is an upsert by primary key. A pid that is new is inserted; a pid whose row differs in any column the file carries is updated (a corrected street, a new retired date); a pid
+the file leaves out is left as it is, because a release marks an address gone with DATE_RETIRED and does not drop the row. The report counts rows read, inserted, changed and, of the
+changed, how many gained a retired date. `refresh_properties` then brings the master list's copy of each G-NAF address in line with the rebuilt reference.
+
 `build_reference` turns ADDRESS_DETAIL joined to STREET_LOCALITY, LOCALITY, STATE and ADDRESS_DEFAULT_GEOCODE into `gnaf_address`, one normalised row per address.
 An address G-NAF marks as an alias (ALIAS_PRINCIPAL = A) is kept as one more spelling of its principal address (ADDRESS_ALIAS names the principal): a record that matches
 the alias spelling links to the principal, so the alias is never a property of its own. A row with no ALIAS_PRINCIPAL value counts as a principal.
@@ -31,6 +35,8 @@ class LoadReport:
     files: int = 0
     rows_read: int = 0
     rows_inserted: int = 0
+    rows_changed: int = 0          # a row that was already there and differs in a column the file carries
+    rows_retired: int = 0          # of the changed rows, those that had no retired date and now have one
     skipped_files: list[str] = field(default_factory=list)
     ignored_columns: dict[str, list[str]] = field(default_factory=dict)
 
@@ -53,6 +59,13 @@ def _columns(cur: psycopg.Cursor, table: str) -> dict[str, str]:
     return {r[0]: r[1] for r in rows}
 
 
+def _primary_key(cur: psycopg.Cursor, table: str) -> list[str]:
+    """The primary key columns of a table, from the catalogue."""
+    rows = cur.execute("SELECT a.attname FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) WHERE i.indrelid = %s::regclass AND i.indisprimary "
+                       "ORDER BY array_position(i.indkey::int2[], a.attnum)", (table,)).fetchall()
+    return [r[0] for r in rows]
+
+
 def load_file(cur: psycopg.Cursor, path: Path, table: str, report: LoadReport) -> None:
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         header = f.readline().rstrip("\r\n")
@@ -70,10 +83,28 @@ def load_file(cur: psycopg.Cursor, path: Path, table: str, report: LoadReport) -
                     cp.write(line if line.endswith("\n") else line + "\n")
                     n += 1
         select = sql.SQL(", ").join(sql.SQL("NULLIF({}, '')::{}").format(sql.Identifier(c), sql.SQL(known[c])) for c in use)
-        cur.execute(sql.SQL("INSERT INTO {t} ({cols}) SELECT {sel} FROM stg ON CONFLICT DO NOTHING").format(
-            t=sql.Identifier(table), cols=sql.SQL(", ").join(sql.Identifier(c) for c in use), sel=select))
+        key = _primary_key(cur, table)
+        missing_key = [k for k in key if k not in use]
+        if missing_key:
+            raise ValueError(f"{path.name}: the primary key column(s) {', '.join(missing_key)} are not in the file")
+        change = [c for c in use if c not in key]
+        if not change:
+            raise ValueError(f"{path.name}: the file has only key columns")
+        ident = sql.Identifier(table)
+        if "date_retired" in change:          # rows that are live here and carry a retired date in the file: counted before the upsert changes them
+            on = sql.SQL(" AND ").join(sql.SQL("x.{k} = NULLIF(s.{k}, '')::{t}").format(k=sql.Identifier(k), t=sql.SQL(known[k])) for k in key)
+            report.rows_retired += cur.execute(sql.SQL("SELECT count(*) FROM (SELECT DISTINCT {keys} FROM stg s JOIN {t} x ON {on} WHERE x.date_retired IS NULL AND NULLIF(s.date_retired, '') IS NOT NULL) d").format(
+                keys=sql.SQL(", ").join(sql.SQL("s.{}").format(sql.Identifier(k)) for k in key), t=ident, on=on)).fetchone()[0]
+        keycols = sql.SQL(", ").join(sql.Identifier(k) for k in key)
+        action = sql.SQL("DO UPDATE SET {sets} WHERE ({old}) IS DISTINCT FROM ({new})").format(
+            sets=sql.SQL(", ").join(sql.SQL("{c} = EXCLUDED.{c}").format(c=sql.Identifier(c)) for c in change),
+            old=sql.SQL(", ").join(sql.SQL("{}.{}").format(ident, sql.Identifier(c)) for c in change), new=sql.SQL(", ").join(sql.SQL("EXCLUDED.{}").format(sql.Identifier(c)) for c in change))
+        rows = cur.execute(sql.SQL("INSERT INTO {t} ({cols}) SELECT {sel} FROM (SELECT DISTINCT ON ({keys}) * FROM stg ORDER BY {keys}, ctid DESC) stg ON CONFLICT ({keys}) {action} RETURNING (xmax = 0)").format(
+            t=ident, cols=sql.SQL(", ").join(sql.Identifier(c) for c in use), sel=select, keys=keycols, action=action)).fetchall()
+        inserted = sum(1 for (new_row,) in rows if new_row)
+        report.rows_inserted += inserted
+        report.rows_changed += len(rows) - inserted
         report.rows_read += n
-        report.rows_inserted += cur.rowcount
         cur.execute("DROP TABLE stg")
 
 
@@ -161,3 +192,18 @@ def build_reference(conn: psycopg.Connection) -> dict[str, int]:
                               principal_pid, display_address, CASE WHEN lon IS NULL OR lat IS NULL THEN NULL ELSE ST_SetSRID(ST_MakePoint(lon, lat), 4326)::geography END FROM ga_stage""")
         cur.execute("ANALYZE gnaf_address")          # no-mutate: planner statistics only
     return {"addresses": done, "aliases": aliases_done, "skipped_no_street": skipped, "skipped_alias_without_principal": orphans}
+
+
+def refresh_properties(conn: psycopg.Connection) -> dict[str, int]:
+    """After a reload and a rebuild: make the master list's copy of each G-NAF address (display line, postcode, state, canonical key, point) the one `gnaf_address` now holds. The id
+    never changes: it hashes the pid. Returns {'refreshed': n, 'retired': n}, where 'retired' counts G-NAF properties whose pid is no longer in the reference (the release retired it or
+    left it out); those are left as they are, because an agency's links point at them and a person decides what to merge. Run as the owner or an administrator."""
+    with conn.transaction():
+        cur = conn.cursor()
+        cur.execute("""UPDATE property p SET display_address = g.display_address, postcode = g.postcode, state = g.state, canon_key = g.canon_key, geog = g.geog
+                       FROM gnaf_address g WHERE p.origin = 'gnaf' AND p.gnaf_pid = g.address_detail_pid
+                        AND (p.display_address, p.postcode, p.state, p.canon_key, coalesce(ST_AsText(p.geog), '')) IS DISTINCT FROM
+                            (g.display_address, g.postcode, g.state, g.canon_key, coalesce(ST_AsText(g.geog), ''))""")
+        refreshed = cur.rowcount
+        retired = cur.execute("""SELECT count(*) FROM property p WHERE p.origin = 'gnaf' AND NOT EXISTS (SELECT 1 FROM gnaf_address g WHERE g.address_detail_pid = p.gnaf_pid)""").fetchone()[0]
+    return {"refreshed": refreshed, "retired": retired}
