@@ -485,7 +485,7 @@ def test_every_distinct_flat_type_and_every_word_is_a_real_g_naf_code():
     assert DISTINCT_FLAT_TYPES <= set(FLAT_TYPES) and set(OTHER_FLAT_WORDS.values()) <= DISTINCT_FLAT_TYPES
     assert set(OTHER_LEVEL_WORDS.values()) <= set(LEVEL_TYPES) - {"L", "FL"}
     for word, code in OTHER_FLAT_WORDS.items():
-        assert FLAT_TYPES[code] == word
+        assert FLAT_TYPES[code] == word or word in {"ATM", "BBQ"}          # the two feed abbreviations of Automated Teller Machine and Barbecue
     for word, code in OTHER_LEVEL_WORDS.items():
         assert LEVEL_TYPES[code] == word
 

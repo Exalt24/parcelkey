@@ -53,12 +53,14 @@ UNIT_MARKERS = frozenset({"UNIT", "U", "APT", "APARTMENT", "FLAT", "SUITE", "STE
 LEVEL_MARKERS = frozenset({"LEVEL", "LVL", "L", "FLOOR", "FLR"})
 # FLAT_TYPE_AUT codes for a space that is not a home or a shop: carspace 3 is not unit 3, so these keep their type in the unit. Every other flat type reads as an ordinary unit.
 DISTINCT_FLAT_TYPES = frozenset({"ANT", "ATM", "BBQ", "BTSD", "CAGE", "CARP", "CARS", "COOL", "GRGE", "MBTH", "SHED", "SIGN", "STOR", "SUBS", "VLT"})
-# The words a feed writes for the commonest of those, and for the level types that are not a plain level (LEVEL_TYPE_AUT): basement 1 is not level 1.
-OTHER_FLAT_WORDS = {"CARSPACE": "CARS", "CARPARK": "CARP", "GARAGE": "GRGE", "STORE": "STOR"}
+# The words a feed writes for those (every flat type in DISTINCT_FLAT_TYPES except Marine Berth, which is two words), and for the level types that are not a plain level (LEVEL_TYPE_AUT): basement 1 is not level 1.
+OTHER_FLAT_WORDS = {"CARSPACE": "CARS", "CARPARK": "CARP", "GARAGE": "GRGE", "STORE": "STOR", "SHED": "SHED", "CAGE": "CAGE", "SIGN": "SIGN", "ANTENNA": "ANT", "ATM": "ATM", "BBQ": "BBQ", "BARBECUE": "BBQ",
+                    "BOATSHED": "BTSD", "COOLROOM": "COOL", "SUBSTATION": "SUBS", "VAULT": "VLT"}
 OTHER_LEVEL_WORDS = {"BASEMENT": "B", "MEZZANINE": "M", "PODIUM": "PDM"}
 # G-NAF flat types a feed writes as a word and a number (Building 2, Tower 3, Block 3, Penthouse 1, Duplex 2). They are read as an ordinary unit, like Shop 3, but they are not in UNIT_MARKERS: a suburb
 # can start with one (Tower Hill, Cottage Point) and UNIT_MARKERS decides what cannot be a suburb. They count only with a number or a letter after them.
-NUMBERED_UNIT_WORDS = frozenset({"BUILDING", "BLDG", "TOWER", "TWR", "BLOCK", "BLCK", "PENTHOUSE", "DUPLEX", "MAISONETTE", "COTTAGE", "STUDIO", "LOFT", "BUNGALOW", "TENANCY"})
+NUMBERED_UNIT_WORDS = frozenset({"BUILDING", "BLDG", "TOWER", "TWR", "BLOCK", "BLCK", "PENTHOUSE", "DUPLEX", "MAISONETTE", "COTTAGE", "STUDIO", "LOFT", "BUNGALOW", "TENANCY",
+                                 "KIOSK", "WARD", "SITE", "STALL", "LOBBY", "WORKSHOP", "WAREHOUSE", "FACTORY", "SHOWROOM", "LEASE", "CLUB", "HALL"})
 _PLAIN_UNIT_WORDS = UNIT_MARKERS | frozenset(OTHER_FLAT_WORDS)
 _UNIT_WORDS = _PLAIN_UNIT_WORDS | NUMBERED_UNIT_WORDS
 _COUNTRY_WORDS = frozenset({"AUSTRALIA", "AUS", "AU"})
@@ -303,6 +305,10 @@ def _postcode(raw: str, state: str, rules: list[str]) -> str:
     return raw
 
 
+# Abbreviations G-NAF never uses in a locality name: Nth Sydney is NORTH SYDNEY, Sth Yarra is SOUTH YARRA, Pt Melbourne is PORT MELBOURNE (Mt and St are handled above).
+SUBURB_WORD_ABBREVIATIONS = {"NTH": "NORTH", "STH": "SOUTH", "PT": "PORT"}
+
+
 def _name_words(words: list[str], rules: list[str], *, saint_everywhere: bool) -> str:
     """Expand Mt and St inside a street or suburb name. A leading St is Saint; inside a suburb name every St is Saint."""
     out: list[str] = []
@@ -313,6 +319,9 @@ def _name_words(words: list[str], rules: list[str], *, saint_everywhere: bool) -
         elif w == "ST" and (saint_everywhere or i < len(words) - 1):
             _add(rules, "SAINT_EXPANDED")
             w = "SAINT"
+        elif saint_everywhere and w in SUBURB_WORD_ABBREVIATIONS:
+            _add(rules, "SUBURB_WORD_EXPANDED")
+            w = SUBURB_WORD_ABBREVIATIONS[w]
         out.append(w)
     return " ".join(out)
 
