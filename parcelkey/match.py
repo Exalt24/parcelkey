@@ -29,7 +29,7 @@ from psycopg.types.json import Jsonb
 from . import block
 from .block import Candidate
 from .master import derived_twins, ensure_derived_property, ensure_gnaf_property
-from .normalise import Addr
+from .normalise import Addr, is_unit_list, street_name_problem
 
 
 BATCH = 400          # no-mutate: records decided per query, a memory and speed trade only
@@ -78,7 +78,11 @@ def _level_choice(rec: Addr, cands: list[Candidate]) -> list[Candidate]:
 
 
 def _new_property(rec: Addr) -> Decision:
-    """Nothing in the reference is near, so a property is made, unless the record has no suburb: a derived key with no locality is one id for every house of that number and street in the country."""
+    """Nothing in the reference is near, so a property is made, unless the street name is garbled (a number or a corner marker that normalise did not read: a property made for it would be a second
+    copy of a home G-NAF lists) or the record has no suburb (a derived key with no locality is one id for every house of that number and street in the country)."""
+    problem = street_name_problem(rec.street_name)
+    if problem:
+        return _set_aside("UNPARSEABLE", {"why": f"{problem}, so no property is made for it: a number in a street name is a unit, level, lot or second house number that was not read", "street": rec.street_name})
     if not rec.locality:
         return _set_aside("NO_LOCALITY", {"why": "no suburb and nothing in the reference to place it by: the address cannot be told from the same number and street anywhere else"})
     return Decision("new", "NEW_DERIVED", 1.0)
@@ -106,6 +110,29 @@ def numbers_equal(a: Addr, b: Addr) -> bool:
     return not a.number_last or not b.number_last or a.number_last == b.number_last
 
 
+def is_range(a: Addr) -> bool:
+    """True for a street number written as a range (`12-14`)."""
+    return bool(a.number_last) and a.number_last != a.number_first
+
+
+def _inside(number: str, first: str, last: str) -> bool:
+    """True when a plain number stands strictly inside a range on the same side of the street: 14 and 16 in 12-18, never 13 (the other side) and never an end."""
+    return number.isdigit() and first.isdigit() and last.isdigit() and int(first) < int(number) < int(last) and int(number) % 2 == int(first) % 2
+
+
+def number_relation(rec: Addr, cand: Addr) -> str:
+    """How the record's street number relates to a candidate's when `numbers_equal` is false: `end` when one of them is a single number and the other a range that starts or ends on it (14 and
+    12-14, the range end that `numbers_equal` leaves out), `inside` when the record's single number stands strictly inside the candidate's range on the same side of the street (14 in 12-18), or
+    an empty string. `same` when `numbers_equal` holds."""
+    if numbers_equal(rec, cand):
+        return "same"
+    if not is_range(rec) and is_range(cand):
+        if rec.number_first == cand.number_last:
+            return "end"
+        return "inside" if _inside(rec.number_first, cand.number_first, cand.number_last) else ""
+    return "end" if is_range(rec) and not is_range(cand) and cand.number_first == rec.number_last else ""
+
+
 def is_transposition(a: str, b: str) -> bool:
     """True when two street numbers differ by one swap of neighbouring digits (12 and 21, 1304 and 1034)."""
     if len(a) != len(b) or len(a) < 2 or not a.isdigit() or not b.isdigit() or a == b:
@@ -123,16 +150,27 @@ def decide(rec: Addr, lat: float | None, lon: float | None, cands: list[Candidat
     """Decide one record. `lat` and `lon` only matter for the lot rule (the distances are already in the candidates)."""
     if not rec.street_name or not (rec.number_first or rec.lot):
         return _set_aside("UNPARSEABLE", {"why": "no street, or neither a street number nor a lot"})
+    if is_unit_list(rec.unit):
+        return _set_aside("UNPARSEABLE", {"why": "the unit is written as a list or a range, so the record names more than one flat and none of them", "unit": rec.unit})
     pool = [c for c in cands if c.sim >= cfg.floor]
     if rec.lot and not rec.number_first:
         return _decide_lot(rec, lat, lon, pool, cfg)
-    same_number = [c for c in pool if locality_ok(rec, c.addr) and numbers_equal(rec, c.addr) and not suffix_conflict(rec, c.addr)]
+    near = [(c, number_relation(rec, c.addr)) for c in pool if locality_ok(rec, c.addr) and not suffix_conflict(rec, c.addr)]
+    same_number = [c for c, rel in near if rel == "same"]
+    ends = [c for c, rel in near if rel == "end"]
+    if is_range(rec):
+        ranged = [c for c in same_number if is_range(c.addr)]
+        same_number = ranged or same_number + ends          # an address with the very same range wins over a single number at one end; with none a range record is at both its ends, so a single address at each is a tie, never a silent link to the first
+    elif not same_number:
+        same_number = ends          # a single number that is the end of a range links to the range when no address has exactly that number
     unit_compatible = [c for c in same_number if not units_conflict(rec, c.addr)]
     compatible = _level_choice(rec, unit_compatible)
     if compatible:
         exact = [c for c in compatible if same_street(rec, c.addr)]
         if len(exact) == 1:
             extra = ("POSTCODE_MISMATCH",) if rec.postcode and exact[0].addr.postcode != rec.postcode else ()
+            if is_range(rec) != is_range(exact[0].addr):
+                extra += ("NUMBER_RANGE_END",)          # one side is a range and the other a single number: the link rests on one end of the range
             return Decision("link", "EXACT_KEY", 1.0, exact[0].pid, rules=extra)
         if len(exact) > 1:
             return _set_aside("AMBIGUOUS_TIE", {"candidates": _cand_detail(exact)})
@@ -151,12 +189,15 @@ def decide(rec: Addr, lat: float | None, lon: float | None, cands: list[Candidat
         if unit_compatible:          # the units agree and only the level is in the way: a record with no level and no unit is not a floor
             detail["candidate_levels"] = sorted({c.addr.level for c in unit_compatible})
         return _set_aside("UNIT_CONFLICT", detail)
-    other_locality = [c for c in pool if c.same_postcode and same_street(rec, c.addr) and numbers_equal(rec, c.addr) and not units_conflict(rec, c.addr)]
+    other_locality = [c for c in pool if c.same_postcode and same_street(rec, c.addr) and number_relation(rec, c.addr) in ("same", "end") and not units_conflict(rec, c.addr)]
     if other_locality:
         return _set_aside("LOCALITY_CONFLICT", {"candidates": _cand_detail(other_locality)})
     swapped = [c for c in pool if locality_ok(rec, c.addr) and same_street(rec, c.addr) and is_transposition(rec.number_first, c.addr.number_first) and not units_conflict(rec, c.addr)]
     if swapped:
         return _set_aside("NUMBER_TRANSPOSED", {"candidates": _cand_detail(swapped)})
+    inside = [c for c, rel in near if rel == "inside" and same_street(rec, c.addr) and not units_conflict(rec, c.addr)]
+    if inside:
+        return _set_aside("AMBIGUOUS_TIE", {"candidates": _cand_detail(inside), "why": "the number stands inside the range of a G-NAF address on the same side of the street: it may be that building or a house of its own"})
     return _new_property(rec)
 
 

@@ -43,8 +43,8 @@ COPY = ("parcelkey", "scripts", "tools", "tests", "docs", "brand", "pytest.ini",
 # module -> (pytest arguments for stage 1, timeout seconds, needs the database)
 TARGETS = {
     "normalise": (["tests/test_normalise.py", "tests/test_match_unit.py", "tests/test_ordinary_addresses.py", "tests/test_corpus.py", "tests/test_gnaf_codes.py", "tests/test_address_forms.py",
-                   "tests/test_email_forms.py"], 300, True),          # test_corpus replays the second corpus through the pipeline, so the database is needed
-    "match": (["tests/test_match_unit.py", "tests/test_pipeline.py", "tests/test_address_forms.py"], 300, True),          # the address forms tables call `decide` on hand written candidates
+                   "tests/test_email_forms.py", "tests/test_recall7_fixes.py"], 300, True),          # test_corpus replays the second corpus through the pipeline, so the database is needed
+    "match": (["tests/test_match_unit.py", "tests/test_pipeline.py", "tests/test_address_forms.py", "tests/test_recall7_fixes.py"], 300, True),          # the address forms tables call `decide` on hand written candidates
     "master": (["tests/test_pipeline.py", "tests/test_reconcile.py"], 300, True),
     "block": (["tests/test_pipeline.py"], 300, True),
     "contacts": (["tests/test_contacts.py"], 300, True),

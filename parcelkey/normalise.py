@@ -9,6 +9,7 @@ sides of a match are in one vocabulary.
 """
 from __future__ import annotations
 
+import itertools
 import re
 import unicodedata
 from dataclasses import dataclass, field, replace
@@ -46,11 +47,15 @@ STREET_TYPE_SPELLINGS = {
 _ALL_STREET_TYPES = {**{code: code for code in STREET_TYPES}, **{short: code for code, short in STREET_TYPES.items()}, **STREET_TYPE_SPELLINGS}
 # A street suffix after the street type: the NAME in full, and the CODE only for the compass points (a code such as IN or ON would read ordinary words as suffixes).
 _COMPASS_CODES = ("N", "S", "E", "W", "NE", "NW", "SE", "SW")
-STREET_SUFFIX_WORDS = {**{name: name for name in STREET_SUFFIXES.values()}, **{code: STREET_SUFFIXES[code] for code in _COMPASS_CODES}}
 _SUFFIX_NAMES = frozenset(STREET_SUFFIXES.values())
+# The short spellings a feed writes for the words of a suffix name (Nth for North, Upr for Upper, Ext and Extn for Extension). Nth, Sth and Extn are G-NAF street type short names as well, so a street
+# type followed by one of them is read as a type and a suffix, never as two types.
+_SUFFIX_SHORT = {"NORTH": ("NTH",), "SOUTH": ("STH",), "UPPER": ("UPR",), "LOWER": ("LWR",), "EXTENSION": ("EXT", "EXTN")}
+_SUFFIX_SPELLINGS = {" ".join(words): name for name in _SUFFIX_NAMES for words in itertools.product(*((w, *_SUFFIX_SHORT.get(w, ())) for w in name.split()))}
+STREET_SUFFIX_WORDS = {**_SUFFIX_SPELLINGS, **{code: STREET_SUFFIXES[code] for code in _COMPASS_CODES}}
 
 UNIT_MARKERS = frozenset({"UNIT", "U", "APT", "APARTMENT", "FLAT", "SUITE", "STE", "SHOP", "VILLA", "OFFICE", "TOWNHOUSE", "TH", "ROOM", "#"})
-LEVEL_MARKERS = frozenset({"LEVEL", "LVL", "L", "FLOOR", "FLR"})
+LEVEL_MARKERS = frozenset({"LEVEL", "LVL", "L", "FLOOR", "FLR", "FL"})
 # FLAT_TYPE_AUT codes for a space that is not a home or a shop: carspace 3 is not unit 3, so these keep their type in the unit. Every other flat type reads as an ordinary unit.
 DISTINCT_FLAT_TYPES = frozenset({"ANT", "ATM", "BBQ", "BTSD", "CAGE", "CARP", "CARS", "COOL", "GRGE", "MBTH", "SHED", "SIGN", "STOR", "SUBS", "VLT"})
 # The words a feed writes for those (every flat type in DISTINCT_FLAT_TYPES except Marine Berth, which is two words), and for the level types that are not a plain level (LEVEL_TYPE_AUT): basement 1 is not level 1.
@@ -74,8 +79,8 @@ _PARTS = re.compile(r"^([A-Z]{0,2})(\d+)([A-Z]?)$")
 _NUMBER = re.compile(r"^(\d+[A-Z]?)(?:-(\d+[A-Z]?))?$")
 _SLASH = re.compile(r"^([A-Z]{0,2}\d+[A-Z]?|[A-Z])/(\d+[A-Z]?)(?:-(\d+[A-Z]?))?$")
 _LEVEL_PREFIX = re.compile(r"^L(\d+[A-Z]?)$")                    # L3/12 is level 3 of number 12
-_GROUND_FLOOR = re.compile(r"\bGROUND (?:FLOOR|LEVEL|FLR|LVL)\b")
-_ORDINAL_FLOOR = re.compile(r"\b(\d+)(?:ST|ND|RD|TH) (?:FLOOR|LEVEL|FLR|LVL)\b")
+_GROUND_FLOOR = re.compile(r"\bGROUND (?:FLOOR|LEVEL|FLR|LVL|FL)\b")
+_ORDINAL_FLOOR = re.compile(r"\b(\d+)(?:ST|ND|RD|TH) (?:FLOOR|LEVEL|FLR|LVL|FL)\b")
 _POSTAL = re.compile(r"(?:^|[\s,])(?:(?:G\s*)?P\s*O\s*BOX|LOCKED\s+BAG|PRIVATE\s+BAG)\b")
 _GLUED = re.compile("^(" + "|".join(re.escape(m) for m in sorted(UNIT_MARKERS, key=len, reverse=True)) + r")(\d+[A-Z]?)(?:/(.+))?$")          # no-mutate: alternation backtracks, so the order of the markers only changes speed
 # a state written with dots (N.S.W., A.C.T., Q.L.D., W.A.): the dots come out before the state is read, so `St` after them is not a street and the suburb is not eaten by the state
@@ -84,7 +89,7 @@ _DISALLOWED = re.compile(r"[^A-Z0-9/,\- #]")
 _POSTCODE = re.compile(r"^\d{4}$")
 _SPACED_SLASH = re.compile(r"(?<=[A-Z0-9])\s+/\s*(?=\d)|(?<=[A-Z0-9])\s*/\s+(?=\d)")          # `4 / 18`, `4 /18` and `4/ 18` are the unit slash
 _DASH_LETTER = re.compile(r"^(\d+)-([A-Z])$")                    # 4-A is number 4A
-_NOT_A_LOCALITY_START = UNIT_MARKERS | LEVEL_MARKERS | {"LOT"}
+_NOT_A_LOCALITY_START = UNIT_MARKERS | LEVEL_MARKERS | {"LOT", "REAR"}
 # the addresses a form is filled with when the person gave none: they are not evidence that two records are one person
 PLACEHOLDER_EMAILS = frozenset({"noemail@noemail.com", "noemail@email.com", "noemail@gmail.com", "nomail@nomail.com", "no@email.com", "none@none.com", "no@no.com", "na@na.com", "n@n.com",
                                 "a@a.com", "test@test.com", "email@email.com", "unknown@unknown.com"})
@@ -103,6 +108,18 @@ _RANGE = re.compile(r"(?<![A-Za-z0-9.#])(\d+[A-Za-z]?)(?:\s*[-\u2010-\u2015\u221
 _RANGE_BLOCKERS = (_UNIT_WORDS | LEVEL_MARKERS | frozenset(OTHER_LEVEL_WORDS) | {"LOT", "NO", "NUMBER", "NUM", "NR", "SPACE", "#"})
 _PLAN = re.compile(r"(?<![A-Z0-9])(LOT\s+\d+[A-Z]?)(?:[\s,]+ON(?![A-Z0-9]))?(?:[\s,/]*(?:DP|SP|LP|RP|CP|PS)\s*\d+[A-Z]?(?![A-Z0-9]))?")          # Lot 5 DP 12345, Lot 12 on Smith Rd: the lot, and the plan or the word on dropped
 _CAR_WORD = re.compile(r"(?<![A-Z0-9])CAR[ \-](SPACE|PARK)(?= +(?:[A-Z]{0,2}\d|[A-Z]\b))")          # Car Space 12 and Car Park 3 are Carspace and Carpark
+# A unit written as a list or a range (Unit 3 & 4, Units 1-3, Unit 3-4, Unit 3 and 4, Units 3 to 4) names more than one flat. It is read as the one key `3-4` (`is_unit_list`), which no G-NAF flat has,
+# and the match stage sets the record aside. A dash with a space on a side is not a list: `Unit 5 - 12 Smith St` is unit 5 of number 12 (UNIT_DASH_SPACED), unless the word is a plural (`Units 1 - 3`).
+_LIST_UNIT_WORDS = frozenset(UNIT_MARKERS - {"#", "U", "TH"})
+_LIST_UNIT_PLURALS = frozenset(word + "S" for word in _LIST_UNIT_WORDS)
+_LIST_ID = r"[A-Za-z]{0,2}\d+[A-Za-z]?"
+_UNIT_LIST = re.compile(rf"(?<![A-Za-z0-9])({'|'.join(sorted(_LIST_UNIT_WORDS | _LIST_UNIT_PLURALS, key=len, reverse=True))})(?:\.\s*|\s+|(?=\d))({_LIST_ID})(\s*(?:&|\+|-)\s*|\s+(?:AND|TO)\s+)({_LIST_ID})(?![A-Za-z0-9/]|\.\d)", re.IGNORECASE)
+_UNIT_RANGE = re.compile(r"^([A-Z]{0,2}\d+[A-Z]?)-([A-Z]{0,2}\d+[A-Z]?)$")
+_LEVEL_WORD_ALT = "|".join(sorted((*LEVEL_MARKERS, *OTHER_LEVEL_WORDS), key=len, reverse=True))          # no-mutate: alternation backtracks, so the order of the words only changes speed
+# a unit, level or lot word, its id, and a dash with a space on at least one side before the house number: the dash is a separator, the same as the slash
+_UNIT_DASH_SPACED = re.compile(rf"((?:(?<![A-Z0-9])(?:{_UNIT_WORD_ALT}|{_LEVEL_WORD_ALT}|LOT)\s+|#\s*)[A-Z]{{0,2}}\d+[A-Z]?)(?:\s+-\s*|\s*-\s+)(?=\d)")
+_AMPERSAND_AFTER_WORD = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z\-]*)\.?\s*&\s*")          # `Smith St & Jones Rd`: the word in front of the ampersand
+_CORNER_WORDS = frozenset({"CNR", "CORNER", "COR", "CRNR", "AND"})
 
 
 def is_street_suffix(text: str) -> bool:
@@ -216,6 +233,10 @@ def _ident(raw: str, rules: list[str]) -> str:
 
 def _flat(marker: str, ident: str, rules: list[str]) -> str:
     """The unit key for a marker word and an id: the id alone, or the flat type code first for a carspace, a garage and the like."""
+    listed = _UNIT_RANGE.match(ident)
+    if listed:          # `3-4`: a list or a range of flats, kept as one key that is none of them
+        _add(rules, "UNIT_LIST_READ")
+        return "-".join(_ident(part, rules) for part in listed.groups())
     cleaned = _ident(ident, rules)
     if marker in OTHER_FLAT_WORDS:
         _add(rules, "FLAT_TYPE_KEPT")
@@ -232,7 +253,7 @@ def _level_slash(token: str) -> re.Match | None:
 def _takes_id(marker: str, nxt: str) -> bool:
     """True when `marker` is a unit, level or lot word that the next token completes."""
     if marker in _PLAIN_UNIT_WORDS:          # Building 2 and Tower 3 are decided by `_numbered_word_unit`, which needs the words behind them
-        return bool(_UID.match(nxt) or _SLASH.match(nxt))
+        return bool(_UID.match(nxt) or _SLASH.match(nxt) or (marker in _LIST_UNIT_WORDS and _UNIT_RANGE.match(nxt)))
     if marker in LEVEL_MARKERS:
         return bool(_ID.match(nxt) or nxt in ("G", "GROUND") or _level_slash(nxt))
     return (marker == "LOT" or marker in OTHER_LEVEL_WORDS) and bool(_ID.match(nxt))
@@ -255,21 +276,73 @@ def _unit_written_later(tokens: list[str], start: int) -> bool:
     return any(_SLASH.match(t) or _GLUED.match(t) or (t in UNIT_MARKERS and _takes_id(t, _peek(tokens, j))) for j, t in enumerate(tokens[start:], start))
 
 
-def _unit_after_street(words: list[str]) -> tuple[int, str, str] | None:
-    """Find a unit written after the street type (`Smith St Unit 5`, `Smith Street Apt 6`, `Smith St #5`). Returns (index of the unit word, the word, the id as written), the word being ''
-    for a glued `#5`, or None when there is none. The word must stand straight after a street type (or the suffix behind one) that has a name before it, so a word inside a
-    street name is never taken."""
-    for j in range(2, len(words)):
-        before = words[j - 1]
-        if not (canonical_street_type(before) or (j >= 3 and before in STREET_SUFFIX_WORDS and canonical_street_type(words[j - 2]))):
-            continue
-        glued = _GLUED.match(words[j])
-        if glued and not glued.group(3):
-            return j, "", glued.group(2)
-        nxt = _peek(words, j)
-        if words[j] in _UNIT_WORDS and (_takes_id(words[j], nxt) or _LETTER.match(nxt) or (words[j] in NUMBERED_UNIT_WORDS and _ID.match(nxt))) and not _SLASH.match(nxt):
-            return j, words[j], nxt
+def is_unit_list(unit: str) -> bool:
+    """True for the unit key of a unit written as a list or a range (`3-4`): it names more than one flat, so a record that carries it is never linked to one of them."""
+    return bool(_UNIT_RANGE.match(unit))
+
+
+def street_name_problem(street_name: str) -> str:
+    """Why a street name cannot be the name of a new property, or an empty string. A standalone number in it (`14 SMITH`, `SMITH SAINT LEVEL 2`) is a unit, a level, a lot or a second house number
+    that was not read (`LEVEL G` too); a corner word after the first word (`SMITH CNR JONES`) is a second street that was not read. Either way minting a property for the garbled name would make a home
+    that G-NAF lists a second time."""
+    words = street_name.split()
+    if any(_ID.match(w) for w in words):
+        return "the street name holds a number"
+    if any(w in ("CNR", "CORNER") for w in words[1:]):
+        return "the street name holds a corner marker"
+    if any(w in LEVEL_MARKERS - {"L"} and nxt in ("G", "GROUND") for w, nxt in zip(words, words[1:])):
+        return "the street name holds a level"
+    return ""
+
+
+def _after_level(ident: str, rules: list[str]) -> str:
+    """The level key for the id after a level word: `G` for G and Ground, else the id with a leading zero dropped."""
+    return "G" if ident in ("G", "GROUND") else _ident(ident, rules)
+
+
+def _follows_street(words: list[str], j: int) -> bool:
+    """True when words[j] stands straight after a street type that has a name before it (j is 2 or more), or after the street suffix behind such a type (the last word of a two word suffix such as `North East` is a suffix too, and the one before it a type)."""
+    if canonical_street_type(words[j - 1]):
+        return True
+    return j >= 3 and words[j - 1] in STREET_SUFFIX_WORDS and bool(canonical_street_type(words[j - 2]))          # a two word suffix ends in a word that is a suffix on its own, behind a first word (North, South) that is a type
+
+
+def _after_street_hit(words: list[str], j: int) -> tuple[str, int, str, str] | None:
+    """What words[j] is when it stands after the street: (kind, words it takes, the word, the id as written) for a unit (`Unit 5`, `#5`, `Apt 6`), a level (`Level 2`, `Floor 2`, `Level G`; the
+    floor words `Ground Floor` and `2nd Floor` are already `LEVEL G` and `LEVEL 2` here), a level type (`Basement 1`), a lot (`Lot 5`) or the word `Rear`; or None. The word is '' for a glued `#5`."""
+    word, nxt = words[j], _peek(words, j)
+    glued = _GLUED.match(word)
+    if glued and not glued.group(3):
+        return "unit", 1, "", glued.group(2)
+    if word in _UNIT_WORDS and (_takes_id(word, nxt) or _LETTER.match(nxt) or (word in NUMBERED_UNIT_WORDS and _ID.match(nxt))) and not _SLASH.match(nxt):
+        return "unit", 2, word, nxt
+    if word in LEVEL_MARKERS and (_ID.match(nxt) or nxt in ("G", "GROUND")):
+        return "level", 2, word, nxt
+    if word in OTHER_LEVEL_WORDS and _ID.match(nxt):
+        return "level_type", 2, word, nxt
+    if word == "LOT" and _ID.match(nxt):
+        return "lot", 2, word, nxt
+    if word == "REAR":
+        return "rear", 1, word, ""
     return None
+
+
+def _drop_corner(words: list[str], rules: list[str]) -> list[str]:
+    """`12 Smith St cnr Jones Rd`, `12 Smith St & Jones Rd`, `12 Smith St Corner of Jones Rd`: the second street is dropped and the number and the first street are kept. A corner word counts only
+    straight after the first street type (or the suffix behind it), and only when a street type with a name before it follows: where the second street ends is read the way the suburb split reads
+    where a street ends, the first common type word, else the first type G-NAF lists. What stands after it is the suburb. A street suffix after the second street goes with it only at the end of the words."""
+    for j in range(2, len(words)):
+        if words[j] not in _CORNER_WORDS or not _follows_street(words, j):
+            continue
+        start = j + 1 + (1 if words[j + 1:j + 2] == ["OF"] else 0)
+        for lookup in (common_street_type, canonical_street_type):
+            end = next((e for e in range(start + 1, len(words)) if lookup(words[e])), None)
+            if end is not None:
+                rest = [] if " ".join(words[end + 1:]) in STREET_SUFFIX_WORDS else words[end + 1:]
+                _add(rules, "CORNER_DROPPED")
+                return [*words[:j], *rest]
+        return words
+    return words
 
 
 def _drop_country(chunks: list[str]) -> list[str]:
@@ -324,6 +397,15 @@ def _name_words(words: list[str], rules: list[str], *, saint_everywhere: bool) -
             w = SUBURB_WORD_ABBREVIATIONS[w]
         out.append(w)
     return " ".join(out)
+
+
+def _unit_list_text(m: re.Match) -> str:
+    """`Units 1-3`, `Unit 3 & 4`, `Unit 3 and 4` as `Unit 1-3`, `Unit 3-4`. A singular word with a space beside the dash is left alone: that dash is a separator (UNIT_DASH_SPACED)."""
+    word, first, sep, second = m.groups()
+    plural = word.upper() in _LIST_UNIT_PLURALS
+    if sep.strip() == "-" and sep != "-" and not plural:
+        return m.group(0)
+    return f"{word[:-1] if plural else word} {first}-{second}"
 
 
 def _join_ranges(raw: str) -> str:
@@ -407,7 +489,7 @@ def _is_state_postcode(chunk: str) -> bool:
 def _locality_like(chunk: str) -> bool:
     """True for a comma chunk that can be a suburb name: no digit, not a unit, level or lot word first, and not ending in a common street type."""
     words = chunk.split()
-    return bool(words) and not any(ch.isdigit() for ch in chunk) and words[0] not in _NOT_A_LOCALITY_START and not common_street_type(words[-1])
+    return bool(words) and not any(ch.isdigit() for ch in chunk) and words[0] not in _NOT_A_LOCALITY_START and not common_street_type(words[-1]) and not _GROUND_FLOOR.search(chunk)
 
 
 def _read_comma_tail(chunks: list[str], trial: list[str]) -> tuple[list[str], str, str, list[str]] | None:
@@ -430,14 +512,17 @@ def _read_comma_tail(chunks: list[str], trial: list[str]) -> tuple[list[str], st
     if len(chunks) < 2:
         return None
     words, state, postcode = _split_tail(chunks[-1].split(), trial)
-    street_part = any(ch.isdigit() for w in words for ch in w) or (bool(words) and words[0] in _NOT_A_LOCALITY_START)
+    street_part = any(ch.isdigit() for w in words for ch in w) or (bool(words) and words[0] in _NOT_A_LOCALITY_START) or bool(_GROUND_FLOOR.search(" ".join(words)))
     if (state or postcode) and not street_part or _locality_like(chunks[-1]):
         return chunks[:-1], state, postcode, words
     return None
 
 
 def _same_words(a: list[str], b: list[str]) -> bool:
-    return " ".join(" ".join(a).replace("-", " ").split()) == " ".join(" ".join(b).replace("-", " ").split())
+    """True when two suburb word lists are one suburb after Mt, St, Nth, Sth and Pt are written out (`Mt Druitt` and `Mount Druitt`), so a suburb said in the line and in the column is said once."""
+    def written_out(words: list[str]) -> str:
+        return _name_words(" ".join(words).replace("-", " ").split(), [], saint_everywhere=True)
+    return written_out(a) == written_out(b)
 
 
 def _tail_agrees(state: str, postcode: str, locality: list[str], state2: str, postcode2: str, locality2: list[str]) -> bool:
@@ -481,12 +566,14 @@ def normalise_address(line: str | None, suburb: str | None = None, state: str | 
     if ranged != raw:
         _add(rules, "NUMBER_RANGE_READ")
         raw = ranged
-    text = _prep(raw, rules)
+    listed = _UNIT_LIST.sub(_unit_list_text, raw)          # the list is read in the main loop (UNIT_LIST_READ); here only `&`, `and` and `to` become a dash, which `_prep` would strip
+    ampersand = _AMPERSAND_AFTER_WORD.sub(lambda m: f"{m.group(1)} CNR " if canonical_street_type(m.group(1)) else m.group(0), listed)          # `Smith St & Jones Rd` is a corner, not two words run together
+    text = _prep(ampersand, rules)
     if _POSTAL.search(text):
         _add(rules, "POSTAL_ADDRESS")
         return Addr(rules=tuple(rules))
     for pattern, replacement, rule in ((_SPACED_SLASH, "/", "UNIT_SLASH_SPACED"), (_UNIT_NO_WORD, r"\1 ", "UNIT_NO_WORD_DROPPED"), (_CAR_WORD, r"CAR\1", "CAR_WORD_JOINED"),
-                                       (_PLAN, r"\1", "LOT_PLAN_DROPPED")):
+                                       (_UNIT_DASH_SPACED, r"\1 ", "UNIT_DASH_SPACED"), (_PLAN, r"\1", "LOT_PLAN_DROPPED")):
         changed = pattern.sub(replacement, text)
         if changed != text:
             _add(rules, rule)
@@ -622,11 +709,33 @@ def normalise_address(line: str | None, suburb: str | None = None, state: str | 
             i += 1
         break
     words = tokens[i:]
-    found = _unit_after_street(words)
-    if found and (not unit or unit == _flat(found[1], found[2], [])):          # a second, different unit is not guessed between: it stays where it was
-        unit = _flat(found[1], found[2], rules)
-        _add(rules, "UNIT_AFTER_STREET")
-        del words[found[0]:found[0] + (2 if found[1] else 1)]
+    j = 2
+    while j < len(words):          # a unit, level, lot or Rear after the street is read the way the same word in front of the street is; a second, different one is not guessed between: it stays where it was
+        hit = _after_street_hit(words, j) if _follows_street(words, j) else None
+        if hit is None:
+            j += 1
+            continue
+        kind, size, marker, ident = hit
+        if kind == "unit" and (not unit or unit == _flat(marker, ident, [])):
+            unit = _flat(marker, ident, rules)
+            _add(rules, "UNIT_AFTER_STREET")
+        elif kind == "level" and (not level or level == _after_level(ident, [])):
+            level = _after_level(ident, rules)
+            _add(rules, "LEVEL_AFTER_STREET")
+        elif kind == "level_type" and (not level or level == f"{OTHER_LEVEL_WORDS[marker]} {_ident(ident, [])}"):
+            level = f"{OTHER_LEVEL_WORDS[marker]} {_ident(ident, rules)}"
+            _add(rules, "LEVEL_AFTER_STREET")
+        elif kind == "lot" and (not lot or lot == ident):
+            lot = ident
+            _add(rules, "LOT_AFTER_STREET")
+        elif kind == "rear":
+            building = building or "REAR"
+            _add(rules, "REAR_AFTER_STREET")
+        else:
+            j += 1          # no-mutate: nothing after a refused word is straight after a street type, so a step of one or two words reads the same
+            continue
+        del words[j:j + size]
+    words = _drop_corner(words, rules)
     if not tail_locality:
         # no comma told where the street ends: read `... STATE POSTCODE` off the end, then take the suburb from the street words
         trial = []
@@ -642,7 +751,7 @@ def normalise_address(line: str | None, suburb: str | None = None, state: str | 
                 street_w, loc2 = w2[:-n], list(locality_words)
             elif w2 and (_take_suffix(list(w2))[1] or canonical_street_type(w2[-1])):
                 street_w = w2
-        elif repeats and common_street_type(w2[-n - 1]):
+        elif repeats and (common_street_type(w2[-n - 1]) or _take_suffix(w2[:-n])[1]):
             street_w, loc2 = w2[:-n], list(locality_words)          # the columns give the suburb and the line ends with it straight after a street type: said twice
         elif not locality_words and not _take_suffix(list(w2))[1]:
             split_w, split_loc = _suburb_split(w2)
