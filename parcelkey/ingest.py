@@ -3,8 +3,11 @@
 Three sample feeds are known: a CRM export, a listing feed and a sales history. Each has a column map (`SOURCES`). A feed whose header lacks a mapped column is
 refused whole, before any row is written, with the missing names. A file is identified by its SHA-256: loading the same bytes again writes nothing.
 
-Rows that cannot be stored go to `ingest_reject` with a reason: no reference, a blank address, the same reference twice in one file, or a reference that was
-stored earlier with different content. Nothing is dropped without a row saying why.
+Rows that cannot be stored go to `ingest_reject` with a reason: more cells than the header has (EXTRA_CELLS), no reference, a blank address, the same reference twice in
+one file, or a reference that was stored earlier with different content. Nothing is dropped without a row saying why.
+
+`read_feed` is the one reader of a feed file. `reconcile` uses it too, so the loader and the check can never disagree about what a blank line, a short row or a repeated
+reference is.
 """
 from __future__ import annotations
 
@@ -65,19 +68,36 @@ def row_sha(raw: dict[str, str]) -> str:
     return hashlib.sha256(json.dumps(raw, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
-def read_feed(path: Path, source: str) -> tuple[str, list[tuple[int, dict[str, str]]]]:
-    """(sha256 of the file, [(line number, row)]). Raises FeedRefused when the header lacks a mapped column."""
+EXTRA_KEY = "(extra cells)"          # where a rejected row keeps the cells that did not fit the header
+
+
+@dataclass(frozen=True)
+class FeedRow:
+    line_no: int                         # the physical line the row ends on (the line it starts on, unless a quoted cell spans lines)
+    raw: dict[str, str]                  # header name -> cell as received; a cell the row is too short to have is ""
+    extra: tuple[str, ...] = ()          # cells beyond the header that hold something (blank ones are not data and are dropped)
+
+
+def read_feed(path: Path, source: str) -> tuple[str, list[FeedRow]]:
+    """(sha256 of the file, its rows). A blank line is not a row. Raises FeedRefused when the file is not UTF-8 text or the header lacks a mapped column."""
     data = Path(path).read_bytes()
     sha = hashlib.sha256(data).hexdigest()
     try:
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise FeedRefused(f"{Path(path).name}: not UTF-8 text ({exc.reason})") from exc
-    reader = csv.DictReader(io.StringIO(text, newline=""))
-    missing = [c for c in SOURCES[source].required() if c not in (reader.fieldnames or [])]
+    reader = csv.reader(io.StringIO(text, newline=""))
+    header = next(reader, [])
+    missing = [c for c in SOURCES[source].required() if c not in header]
     if missing:
         raise FeedRefused(f"{Path(path).name}: the {source} feed needs column(s) {', '.join(missing)}")
-    return sha, [(i + 2, {k: (v or "") for k, v in row.items() if k is not None}) for i, row in enumerate(reader)]
+    rows = []
+    for cells in reader:
+        if not cells:
+            continue
+        raw = {name: (cells[i] if i < len(cells) else "") for i, name in enumerate(header)}
+        rows.append(FeedRow(reader.line_num, raw, tuple(c for c in cells[len(header):] if c.strip())))
+    return sha, rows
 
 
 def ingest_file(cur: psycopg.Cursor, agency: str, source: str, path: Path, *, now: datetime | None = None) -> IngestResult:
@@ -93,10 +113,13 @@ def ingest_file(cur: psycopg.Cursor, agency: str, source: str, path: Path, *, no
     existing = {r[0]: r[1] for r in cur.execute("SELECT source_ref, raw_sha256 FROM source_record WHERE agency_id = %s AND source = %s", (agency, source)).fetchall()}
     seen: set[str] = set()
     stored = rejected = unchanged = 0
-    for line_no, raw in rows:
+    for line_no, raw, extra in ((r.line_no, r.raw, r.extra) for r in rows):
         ref = raw.get(spec.ref, "").strip()
         reason = None
-        if not ref:
+        if extra:
+            reason = ("EXTRA_CELLS", f"the row has {len(extra)} cell(s) beyond the {len(raw)} columns of the header; the row is not stored")
+            raw = {**raw, EXTRA_KEY: list(extra)}
+        elif not ref:
             reason = ("MISSING_REF", f"the {spec.ref} column is empty")
         elif not raw.get(spec.address, "").strip():
             reason = ("BLANK_ADDRESS", f"the {spec.address} column is empty")

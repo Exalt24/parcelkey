@@ -79,6 +79,24 @@ def write_feeds(folder: Path, *, crm_rows=(), listing_rows=(), sales_rows=()) ->
     return folder
 
 
+CRM_HEADER = "contact_ref,full_name,email,phone,address,suburb,state,postcode,created_on"
+
+
+def crm_line(ref, address="12 Smith St", name="", email="", phone=""):
+    return f"{ref},{name},{email},{phone},{address},Fakeville,NSW,2000,2026-01-01"
+
+
+def crm_text(*lines, eol="\n"):
+    """A crm_export.csv body: the header and these lines, written exactly as given (blank lines, short rows, extra cells and all)."""
+    return eol.join([CRM_HEADER, *lines]) + eol
+
+
+def write_crm_text(folder: Path, text: str) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / SOURCES["crm"].file).write_bytes(text.encode("utf-8"))
+    return folder
+
+
 def run(conn, agency, folder, cfg: MatchConfig = MatchConfig(), **kw):
     return run_agency(conn, agency, folder, cfg, **kw)
 

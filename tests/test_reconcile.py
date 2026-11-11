@@ -413,3 +413,52 @@ def test_five_superseded_properties_are_listed_by_name_and_the_rest_by_count(han
     hand(REFERENCE + [h.addr(f"G{n}", n) for n in numbers])
     detail = check(conn, folder).findings[0].detail
     assert detail.startswith("8 derived properties now equal a G-NAF address (") and detail.count(" is now G-NAF ") == 5
+
+
+# ---- reconcile reads a feed file the way the loader does --------------------------------------------------------------------------------------------
+
+def test_class_reconcile_accepts_every_shape_of_feed_file_the_loader_settled(hand, conn, admin, tmp_path):
+    """CLASS-TABLE (P5-11): reconcile --feeds once said NOT RECONCILED for a blank line, a repeated reference and a short row, because it read the file with a reader of its own. One reader now, so every shape the
+    loader handled reconciles, and an extra cell row (rejected, kept in the reject table) does too."""
+    hand(REFERENCE)
+    ok1, ok2 = h.crm_line("C1", "12 Smith St"), h.crm_line("C2", "14 Smith St")
+    shapes = {
+        "plain": h.crm_text(ok1, ok2),
+        "blank line between rows": h.crm_text(ok1, "", ok2),
+        "blank lines at the end": h.crm_text(ok1, ok2) + "\n\n",
+        "a repeated reference": h.crm_text(ok1, h.crm_line("C1", "99 Other St"), ok2),
+        "a short row": h.crm_text(ok1, "C2,Bob,,,14 Smith St"),
+        "extra cells": h.crm_text(ok1, ok2 + ",STRAY"),
+        "a missing reference": h.crm_text(ok1, h.crm_line("", "14 Smith St")),
+        "a blank address": h.crm_text(ok1, h.crm_line("C2", "   ")),
+        "windows line ends": h.crm_text(ok1, ok2, eol="\r\n"),
+        "a byte order mark": "﻿" + h.crm_text(ok1, ok2),
+        "a quoted cell spanning lines": h.crm_text(ok1, h.crm_line("C2", '"14 Smith\nSt"')),
+    }
+    for name, text in shapes.items():
+        db.wipe(db.default_admin_dsn())
+        folder = h.write_crm_text(tmp_path / name.replace(" ", "_"), text)
+        h.run(conn, AGENCY, folder)
+        res = check(conn, folder)
+        assert res.ok, (name, [str(f) for f in res.findings])
+        assert any(line.startswith("file       crm_export.csv: ") for line in res.lines), name
+
+
+def test_reconcile_does_not_keep_a_reader_of_its_own():
+    import parcelkey.ingest as ingest
+    import parcelkey.reconcile as reconcile_module
+    assert reconcile_module.read_feed is ingest.read_feed and not hasattr(reconcile_module, "csv") and not hasattr(reconcile_module, "_read_file_rows")
+
+
+@pytest.mark.parametrize("name, content, why", [
+    ("not utf8", "contact_ref,address\nC1,Caf\xe9 St\n".encode("latin-1"), "not UTF-8"),
+    ("a missing column", b"contact_ref,address\nC1,12 Smith St\n", "needs column"),
+    ("an empty file", b"", "needs column"),
+])
+def test_a_feed_file_that_cannot_be_read_is_a_finding_and_not_a_crash(done, tmp_path, name, content, why):
+    conn, admin, folder = done
+    other = tmp_path / "other"
+    shutil.copytree(folder, other)
+    (other / "crm_export.csv").write_bytes(content)
+    res = check(conn, other)
+    assert names(res) == ["FILE_ROWS"] and "cannot be read as the crm feed" in str(res.findings[0]) and why in str(res.findings[0])

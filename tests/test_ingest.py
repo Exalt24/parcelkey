@@ -9,6 +9,7 @@ import pytest
 import helpers as h
 from conftest import AGENCY, snapshot
 
+from parcelkey import db
 from parcelkey.db import agency_tx
 from parcelkey.ingest import SOURCES, FeedRefused, ingest_file, read_feed, row_sha
 from parcelkey.records import normalise_pending
@@ -139,7 +140,7 @@ def test_listing_coordinates_become_a_geography_and_bad_ones_are_dropped_with_a_
 def test_read_feed_gives_sha_and_numbered_rows(tmp_path):
     folder = h.write_feeds(tmp_path / "f", sales_rows=[h.sale("S1", "12 Smith St, Fakeville NSW 2000"), h.sale("S2", "5 Rose Rd, Fakeville NSW 2000")])
     sha, rows = read_feed(folder / "sales_history.csv", "sales")
-    assert len(sha) == 64 and [n for n, _ in rows] == [2, 3] and rows[0][1]["sale_ref"] == "S1"
+    assert len(sha) == 64 and [r.line_no for r in rows] == [2, 3] and rows[0].raw["sale_ref"] == "S1" and rows[0].extra == ()
     assert row_sha({"a": "1", "b": "2"}) == row_sha({"b": "2", "a": "1"}) != row_sha({"a": "1", "b": "3"})
 
 
@@ -190,3 +191,78 @@ def test_a_street_with_no_number_and_a_number_with_no_street_are_both_unparseabl
     with agency_tx(conn, AGENCY) as cur:
         normalise_pending(cur, AGENCY)
     assert dict(admin.execute("select source_ref, norm_status from source_record").fetchall()) == {"C1": "unparseable", "C2": "unparseable", "C3": "ok", "C4": "ok"}
+
+
+# ---- the one reader of a feed: EXTRA_CELLS, blank lines, short rows ---------------------------------------------------------------------------------
+
+crm_text = h.crm_text
+
+
+def test_a_row_with_more_cells_than_the_header_is_rejected_and_kept_in_the_reject_table(conn, admin, tmp_path):
+    """P5-4: the overflow used to be dropped with no reject row."""
+    folder = h.write_crm_text(tmp_path / "f", crm_text(h.crm_line("C1"), h.crm_line("C2", "5 Rose Rd") + ",STRAY,CELLS", h.crm_line("C3", "7 Elm Ct")))
+    r = ingest(conn, folder / "crm_export.csv", "crm")
+    assert (r.row_count, r.stored, r.rejected) == (3, 2, 1)
+    assert admin.execute("select source_ref from source_record order by line_no").fetchall() == [("C1",), ("C3",)]
+    code, reason, raw = admin.execute("select reason_code, reason, raw from ingest_reject").fetchone()
+    assert code == "EXTRA_CELLS" and "2 cell(s) beyond the 9 columns" in reason
+    assert raw["contact_ref"] == "C2" and raw["address"] == "5 Rose Rd" and raw["(extra cells)"] == ["STRAY", "CELLS"]
+    assert admin.execute("select row_count, stored, rejected from source_load").fetchone() == (3, 2, 1)
+
+
+def test_an_extra_cell_row_does_not_use_up_its_reference(conn, admin, tmp_path):
+    """A row whose cells are misaligned must not make a later good row with the same reference a DUPLICATE_REF."""
+    folder = h.write_crm_text(tmp_path / "f", crm_text(h.crm_line("C1") + ",X", h.crm_line("C1", "99 Other St")))
+    ingest(conn, folder / "crm_export.csv", "crm")
+    assert admin.execute("select reason_code from ingest_reject").fetchall() == [("EXTRA_CELLS",)]
+    assert admin.execute("select raw ->> 'address' from source_record").fetchone()[0] == "99 Other St"
+
+
+def test_class_the_shapes_of_a_feed_file_the_reader_must_settle_one_way(conn, admin, tmp_path):
+    """CLASS-TABLE: each shape of file gives (text, stored refs, reject reasons in line order, row count). Blank lines are not rows, a short row is stored with empty cells, a repeated reference keeps the
+    first, blank overflow cells are not data, a quoted cell may span lines, CRLF reads the same."""
+    ok1, ok2 = h.crm_line("C1"), h.crm_line("C2", "5 Rose Rd")
+    table = {
+        "plain": (crm_text(ok1, ok2), ["C1", "C2"], [], 2),
+        "blank line between rows": (crm_text(ok1, "", ok2), ["C1", "C2"], [], 2),
+        "blank lines at the end": (crm_text(ok1, ok2) + "\n\n", ["C1", "C2"], [], 2),
+        "short row": (crm_text(ok1, "C2,Bob,,,5 Rose Rd"), ["C1", "C2"], [], 2),
+        "duplicate reference": (crm_text(ok1, h.crm_line("C1", "99 Other St")), ["C1"], ["DUPLICATE_REF"], 2),
+        "extra cell with data": (crm_text(ok1, ok2 + ",X"), ["C1"], ["EXTRA_CELLS"], 2),
+        "extra cells that are blank": (crm_text(ok1 + ",", ok2 + ",,"), ["C1", "C2"], [], 2),
+        "a quoted cell spanning two lines": (crm_text(ok1, h.crm_line("C2", '"5 Rose\nRd"')), ["C1", "C2"], [], 2),
+        "windows line ends": (crm_text(ok1, ok2, eol="\r\n"), ["C1", "C2"], [], 2),
+        "a whitespace only reference": (crm_text(ok1, h.crm_line("  ", "5 Rose Rd")), ["C1"], ["MISSING_REF"], 2),
+    }
+    for name, (text, stored, rejects, count) in table.items():
+        db.wipe(db.default_admin_dsn())
+        folder = h.write_crm_text(tmp_path / name.replace(" ", "_"), text)
+        r = ingest(conn, folder / "crm_export.csv", "crm")
+        got = [x[0] for x in admin.execute("select source_ref from source_record order by line_no").fetchall()]
+        got_rejects = [x[0] for x in admin.execute("select reason_code from ingest_reject order by line_no").fetchall()]
+        assert (got, got_rejects, r.row_count) == (stored, rejects, count), name
+        assert (r.stored, r.rejected) == (len(stored), len(rejects)), name
+
+
+def test_line_numbers_are_the_lines_of_the_file_even_with_blank_lines(tmp_path):
+    folder = h.write_crm_text(tmp_path / "f", crm_text(h.crm_line("C1"), "", h.crm_line("C2")))
+    _, rows = read_feed(folder / "crm_export.csv", "crm")
+    assert [(r.line_no, r.raw["contact_ref"]) for r in rows] == [(2, "C1"), (4, "C2")]
+
+
+def test_a_short_row_is_filled_with_empty_cells_and_an_empty_file_is_refused(tmp_path):
+    folder = h.write_crm_text(tmp_path / "f", crm_text("C1,Bob"))
+    _, rows = read_feed(folder / "crm_export.csv", "crm")
+    assert rows[0].raw == {**{c: "" for c in h.CRM_HEADER.split(",")}, "contact_ref": "C1", "full_name": "Bob"}
+    (tmp_path / "empty").mkdir()
+    (tmp_path / "empty" / "crm_export.csv").write_bytes(b"")
+    with pytest.raises(FeedRefused, match="needs column"):
+        read_feed(tmp_path / "empty" / "crm_export.csv", "crm")
+
+
+def test_the_feed_reader_is_the_only_place_the_package_reads_a_feed_file():
+    """CLASS: `csv` is imported by the feed reader and by the answer key loader, nowhere else (reconcile once had its own reader and disagreed with the loader)."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent / "parcelkey"
+    users = sorted(p.name for p in root.glob("*.py") if "import csv" in p.read_text(encoding="utf-8"))
+    assert users == ["evaluate.py", "ingest.py"]

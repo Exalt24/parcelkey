@@ -1,8 +1,9 @@
 """Reconcile: prove the counts add up, from the database's own side and from the feed files.
 
 Checks, each reported by name (exit code 1 when any fails):
-  FILE_ROWS        every row of a feed file is stored, rejected or unchanged (the file is re-read here with its own small reader, not the loader's)
-  RAW_STORED       each stored raw row equals the file row it came from, field by field
+  FILE_ROWS        every row of a feed file is stored, rejected or unchanged (the file is read with `ingest.read_feed`, the one reader the loader uses, so a blank line, a short
+                   row or a repeated reference counts the same way in both); a feed file that cannot be read as its feed is a finding, not a crash
+  RAW_STORED       each stored raw row equals the file row it came from (matched by line number), field by field
   ACCOUNTED        every source record is linked or in open quarantine, never both, never neither, and none is still pending
   NO_ORPHAN        no link points at a missing record or a missing property; no quarantine row at a missing record
   ONE_ID           no property has two ids and no two properties share a G-NAF pid or a derived key; each id is the one its derivation gives
@@ -13,13 +14,12 @@ Checks, each reported by name (exit code 1 when any fails):
 """
 from __future__ import annotations
 
-import csv
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import psycopg
 
-from .ingest import SOURCES
+from .ingest import SOURCES, FeedRefused, read_feed
 from .master import property_id_for_derived, property_id_for_gnaf
 
 QUARANTINE_REASONS = {"UNPARSEABLE", "POSTAL_ADDRESS", "AMBIGUOUS_TIE", "BELOW_THRESHOLD", "UNIT_CONFLICT", "LOCALITY_CONFLICT", "NUMBER_TRANSPOSED", "LOT_NO_GEOCODE", "LOT_TOO_FAR", "NO_LOCALITY"}
@@ -45,14 +45,6 @@ class ReconcileResult:
         return not self.findings
 
 
-def _read_file_rows(path: Path) -> list[dict[str, str]]:
-    """The reconcile's own reader: plain csv.reader, no DictReader, no shared code with the loader."""
-    with Path(path).open("r", encoding="utf-8-sig", newline="") as f:
-        rdr = csv.reader(f)
-        header = next(rdr, [])
-        return [dict(zip(header, row)) for row in rdr]
-
-
 def reconcile(cur: psycopg.Cursor, agency: str, feeds_dir: Path | None = None) -> ReconcileResult:
     """Run every check for one agency. Runs inside agency_tx."""
     res = ReconcileResult(agency)
@@ -66,7 +58,11 @@ def reconcile(cur: psycopg.Cursor, agency: str, feeds_dir: Path | None = None) -
             path = Path(feeds_dir) / spec.file
             if not path.is_file():
                 continue
-            rows = _read_file_rows(path)
+            try:
+                _, rows = read_feed(path, source)
+            except FeedRefused as exc:
+                fail("FILE_ROWS", f"{path.name}: the file cannot be read as the {source} feed ({exc})")
+                continue
             loads = cur.execute("SELECT load_id, row_count, stored, rejected, unchanged FROM source_load WHERE agency_id = %s AND source = %s AND file_name = %s ORDER BY load_id",
                                 (agency, source, path.name)).fetchall()
             if not loads:
@@ -80,11 +76,10 @@ def reconcile(cur: psycopg.Cursor, agency: str, feeds_dir: Path | None = None) -
                                         "WHERE r.agency_id = %s AND l.load_id = %s", (agency, load_id)).fetchone()[0]
             if real_stored != stored or real_rejected != rejected:
                 fail("FILE_ROWS", f"{path.name}: the load says stored {stored} rejected {rejected}, the tables hold {real_stored} and {real_rejected}")
-            by_ref = {r.get(spec.ref, "").strip(): r for r in rows}
+            by_line = {r.line_no: r.raw for r in rows}
             bad = 0
-            for source_ref, raw in cur.execute("SELECT source_ref, raw FROM source_record WHERE agency_id = %s AND load_id = %s", (agency, load_id)).fetchall():
-                file_row = by_ref.get(source_ref)
-                if file_row is None or {k: (v or "") for k, v in file_row.items()} != raw:
+            for line_no, raw in cur.execute("SELECT line_no, raw FROM source_record WHERE agency_id = %s AND load_id = %s", (agency, load_id)).fetchall():
+                if by_line.get(line_no) != raw:
                     bad += 1
             if bad:
                 fail("RAW_STORED", f"{path.name}: {bad} stored rows differ from the file")
