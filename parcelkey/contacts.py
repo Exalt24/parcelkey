@@ -5,7 +5,8 @@ it is kept in the evidence (`landline_not_used_to_merge`) and never merges anyon
 evidence: two people called the same, with different emails and mobiles, stay two contacts, and two mentions of one person with no shared email or mobile stay two as well.
 
 Each decision keeps its evidence: which identifier matched, and which earlier records already carried it. A mention that would join a cluster of more than
-`max_cluster` records (a shared reception number, say) is set aside in `contact_quarantine` instead of merging a crowd.
+`max_cluster` records (a shared reception number, say) is set aside in `contact_quarantine` instead of merging a crowd. The cap it was set aside under is kept with it, and a later run
+with a HIGHER cap decides those mentions again (a run with the same or a lower cap leaves them alone), so raising the cap is never a permanent loss of the mentions that came after it.
 
 A contact id comes from the record that created the contact and is never reassigned. When a record bridges two contacts, the one with the smaller id survives; the other is
 kept with `merged_into` and every link and identifier moves to the survivor, with a `contact_merge` row recording why.
@@ -36,6 +37,7 @@ class ContactCounts:
     merged: int = 0
     quarantined: int = 0
     records: int = 0
+    retried: int = 0               # mentions set aside under a lower cap that this run decided again
 
 
 def contact_id_for(agency: str, record_id: str) -> str:
@@ -50,13 +52,17 @@ def resolve_pending(cur: psycopg.Cursor, agency: str, max_cluster: int = DEFAULT
     """Resolve every record that mentions a contact and has not been resolved. Runs inside agency_tx."""
     counts = ContactCounts()
     rows = cur.execute(
-        """SELECT r.record_id, r.contact_name, r.contact_email, r.contact_phone FROM source_record r
+        """SELECT r.record_id, r.contact_name, r.contact_email, r.contact_phone, q.record_id IS NOT NULL FROM source_record r
+           LEFT JOIN contact_quarantine q ON q.agency_id = r.agency_id AND q.record_id = r.record_id
            WHERE r.agency_id = %s AND r.norm_status <> 'pending' AND (r.contact_name <> '' OR r.contact_email <> '' OR r.contact_phone <> '')
              AND NOT EXISTS (SELECT 1 FROM contact_link c WHERE c.agency_id = r.agency_id AND c.record_id = r.record_id)
-             AND NOT EXISTS (SELECT 1 FROM contact_quarantine q WHERE q.agency_id = r.agency_id AND q.record_id = r.record_id)
-           ORDER BY r.record_id""", (agency,)).fetchall()
-    for record_id, name, email, phone in rows:
+             AND (q.record_id IS NULL OR (q.detail ->> 'max_cluster')::int < %s)
+           ORDER BY r.record_id""", (agency, max_cluster)).fetchall()
+    for record_id, name, email, phone, was_set_aside in rows:
         counts.records += 1
+        if was_set_aside:          # set aside under a lower cap: decided again, and set aside again with the new cap when it is still too large
+            cur.execute("DELETE FROM contact_quarantine WHERE agency_id = %s AND record_id = %s", (agency, record_id))
+            counts.retried += 1
         idents = [(k, v) for k, v in (("email", email), ("phone", phone if is_mobile(phone) else "")) if v]
         landline = {"landline_not_used_to_merge": phone} if phone and not is_mobile(phone) else {}
         found: dict[str, list[str]] = {}

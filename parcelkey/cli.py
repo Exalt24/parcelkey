@@ -77,7 +77,7 @@ def cmd_run(a: argparse.Namespace) -> int:
     print(f"match      {m.records} decided: linked {sum(m.linked.values())} ({', '.join(f'{k} {v}' for k, v in sorted(m.linked.items())) or 'none'}), "
           f"quarantined {sum(m.quarantined.values())} ({', '.join(f'{k} {v}' for k, v in sorted(m.quarantined.items())) or 'none'}), properties added {m.new_properties}")
     c = r.contacts
-    print(f"contacts   {c.records} mentions: new {c.new}, linked {sum(c.linked.values())} ({', '.join(f'{k} {v}' for k, v in sorted(c.linked.items())) or 'none'}), merged {c.merged}, set aside {c.quarantined}")
+    print(f"contacts   {c.records} mentions: new {c.new}, linked {sum(c.linked.values())} ({', '.join(f'{k} {v}' for k, v in sorted(c.linked.items())) or 'none'}), merged {c.merged}, set aside {c.quarantined}" + (f", decided again after a higher cap {c.retried}" if c.retried else ""))
     print("timings    " + "  ".join(f"{k} {v:.2f} s" for k, v in r.seconds.items()))
     for refusal in r.refused:
         print(f"REFUSED: {refusal.reason}", file=sys.stderr)

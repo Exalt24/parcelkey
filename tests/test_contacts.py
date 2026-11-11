@@ -109,8 +109,8 @@ def test_a_crowd_on_one_number_is_not_merged(clean, conn, admin, tmp_path):
     assert len(links) == 4 and r.contacts.quarantined == 2
     assert admin.execute("select record_id, reason_code, detail from contact_quarantine order by 1").fetchall() == [
         ("crm:C4", "CLUSTER_TOO_LARGE", {"contacts": [contact_id_for(AGENCY, "crm:C0")], "max_cluster": 4}), ("crm:C5", "CLUSTER_TOO_LARGE", {"contacts": [contact_id_for(AGENCY, "crm:C0")], "max_cluster": 4})]
-    r2 = h.run(conn, AGENCY, None)
-    assert r2.contacts.records == 0                                          # set aside once, not retried
+    r2 = h.run(conn, AGENCY, None, max_cluster=4)
+    assert r2.contacts.records == 0                                          # the same cap: set aside once, not decided again
 
 
 def test_the_cap_counts_every_cluster_a_mention_would_join(clean, conn, admin, tmp_path):
@@ -270,3 +270,58 @@ def test_a_mobile_mention_bridges_two_contacts_but_a_shared_landline_does_not(cl
     r, links = resolve(conn, admin, tmp_path, rows)
     assert r.contacts.merged == 1 and links["crm:C1"] == links["crm:C2"] == links["crm:C3"] == links["crm:C4"]
     assert admin.execute("select evidence from contact_merge").fetchone()[0]["matched_on"] == ["email", "phone"]
+
+
+# ---- a mention set aside by the cap is decided again when the cap is raised (P5-12) ------------------------------------------------------------------------
+
+def one_email(n):
+    return [person(f"C{i:02d}", f"Person {i}", "office@example.com") for i in range(n)]
+
+
+def test_class_a_raised_cap_decides_the_set_aside_mentions_again_and_only_then(clean, conn, admin, tmp_path):
+    """CLASS-TABLE (P5-12): 8 mentions of one email under a first cap, then a second run under another. Each case gives (first cap, second cap, linked after, set aside after, decided again by the second run)."""
+    table = {
+        "a much higher cap": (4, 100, 8, 0, 4), "a cap that lets only some in": (4, 5, 5, 3, 4), "the same cap": (4, 4, 4, 4, 0), "a lower cap": (4, 3, 4, 4, 0),
+        "a cap that lets all but one in": (4, 7, 7, 1, 4), "a cap that never set any aside": (100, 200, 8, 0, 0),
+    }
+    folder = h.write_feeds(tmp_path / "f", crm_rows=one_email(8))
+    for name, (first, second, linked, aside, retried) in table.items():
+        db.wipe(db.default_admin_dsn())
+        h.run(conn, AGENCY, folder, max_cluster=first)
+        r = h.run(conn, AGENCY, None, max_cluster=second)
+        got = (admin.execute("select count(*) from contact_link").fetchone()[0], admin.execute("select count(*) from contact_quarantine").fetchone()[0], r.contacts.retried)
+        assert got == (linked, aside, retried), name
+        assert r.contacts.records == retried and sum(r.contacts.linked.values()) + r.contacts.quarantined == retried, name
+        again = h.run(conn, AGENCY, None, max_cluster=second)                                              # the same cap again: nothing is decided twice
+        assert (again.contacts.records, again.contacts.retried) == (0, 0), name
+        if aside:
+            assert {d["max_cluster"] for (d,) in admin.execute("select detail from contact_quarantine").fetchall()} == {max(first, second)}, name
+
+
+def test_a_mention_that_is_still_too_large_under_the_new_cap_is_set_aside_again_with_the_new_cap(clean, conn, admin, tmp_path):
+    folder = h.write_feeds(tmp_path / "f", crm_rows=one_email(8))
+    h.run(conn, AGENCY, folder, max_cluster=4)
+    r = h.run(conn, AGENCY, None, max_cluster=5)
+    assert (r.contacts.records, r.contacts.retried, r.contacts.quarantined, sum(r.contacts.linked.values())) == (4, 4, 3, 1)
+    assert admin.execute("select record_id from contact_quarantine order by 1").fetchall() == [("crm:C05",), ("crm:C06",), ("crm:C07",)]
+    assert admin.execute("select record_id, rule from contact_link where record_id = 'crm:C04'").fetchone() == ("crm:C04", "EMAIL")
+
+
+def test_a_retried_mention_is_reconciled_and_leaves_no_quarantine_row_behind(clean, conn, admin, tmp_path):
+    from parcelkey.reconcile import reconcile
+    folder = h.write_feeds(tmp_path / "f", crm_rows=one_email(6))
+    h.run(conn, AGENCY, folder, max_cluster=3)
+    h.run(conn, AGENCY, None, max_cluster=50)
+    assert admin.execute("select count(*) from contact_quarantine").fetchone()[0] == 0 and admin.execute("select count(distinct contact_id) from contact_link").fetchone()[0] == 1
+    with db.agency_tx(conn, AGENCY) as cur:
+        res = reconcile(cur, AGENCY)
+    assert not [f for f in res.findings if f.check == "CONTACTS"]
+
+
+def test_the_run_command_says_how_many_set_aside_mentions_it_decided_again(clean, conn, tmp_path):
+    from test_quality_cli import cli
+    folder = h.write_feeds(tmp_path / "f", crm_rows=one_email(5))
+    first = cli("run", "--agency", AGENCY, "--feeds", str(folder), "--new-agency", "--max-cluster", "3", check=True).stdout
+    assert "set aside 2" in first and "decided again" not in first
+    second = cli("run", "--agency", AGENCY, "--feeds", str(folder), "--max-cluster", "10", check=True).stdout
+    assert "set aside 0, decided again after a higher cap 2" in second
