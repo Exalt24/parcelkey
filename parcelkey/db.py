@@ -46,6 +46,10 @@ class UnsafeRole(RuntimeError):
     """The connection's role would skip row level security."""
 
 
+class UnknownAgency(ValueError):
+    """The agency has never been loaded: most likely a typo, which must not quietly start a second agency or report an empty one as fine."""
+
+
 def _dotenv() -> None:
     """Read KEY=VALUE lines from a .env in the working folder or the repo root. Real environment variables win. tools/pg.py writes this file."""
     for path in (Path.cwd() / ".env", ENV_FILE):
@@ -202,6 +206,17 @@ def init_db(admin_dsn: str, app_password: str | None = None, owner_password: str
         for v in ("campaign_property", "contact_property"):
             conn.execute(sql.SQL("GRANT SELECT ON {} TO {}").format(sql.Identifier(v), app))
         conn.execute(sql.SQL("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {} TO {}").format(sch, app))
+
+
+def agency_exists(cur: psycopg.Cursor, agency: str) -> bool:
+    """Whether the agency has been started. Runs inside agency_tx for that agency (row level security shows a transaction only its own agency's row)."""
+    return cur.execute("SELECT 1 FROM agency WHERE agency_id = %s", (agency,)).fetchone() is not None
+
+
+def require_agency(cur: psycopg.Cursor, agency: str, *, can_create: bool = False) -> None:
+    """Raise UnknownAgency unless the agency has been started. Runs inside agency_tx."""
+    if not agency_exists(cur, agency):
+        raise UnknownAgency(f"no agency {agency!r} has been loaded: check the spelling" + (", or pass --new-agency to start it with this run" if can_create else ""))
 
 
 def wipe(admin_dsn: str, *, reference: bool = False) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,6 +21,14 @@ from .reconcile import reconcile
 def _cfg(a: argparse.Namespace) -> MatchConfig:
     d = MatchConfig()
     return MatchConfig(threshold=a.threshold if a.threshold is not None else d.threshold, lot_distance_m=a.lot_distance if a.lot_distance is not None else d.lot_distance_m)
+
+
+@contextmanager
+def known_agency(conn: psycopg.Connection, agency: str):
+    """An agency transaction for a command that reads: an agency that has never been loaded is refused (exit 2) and never reported as an empty, fine one."""
+    with db.agency_tx(conn, agency) as cur:
+        db.require_agency(cur, agency)
+        yield cur
 
 
 def cmd_init_db(a: argparse.Namespace) -> int:
@@ -58,7 +67,7 @@ def ingest_line(i) -> str:
 
 def cmd_run(a: argparse.Namespace) -> int:
     with db.connect() as conn:
-        r = run_agency(conn, a.agency, Path(a.feeds), _cfg(a), max_cluster=a.max_cluster)
+        r = run_agency(conn, a.agency, Path(a.feeds), _cfg(a), max_cluster=a.max_cluster, new_agency=a.new_agency)
     for i in r.ingested:
         print(ingest_line(i))
     m = r.match
@@ -68,11 +77,13 @@ def cmd_run(a: argparse.Namespace) -> int:
     c = r.contacts
     print(f"contacts   {c.records} mentions: new {c.new}, linked {sum(c.linked.values())} ({', '.join(f'{k} {v}' for k, v in sorted(c.linked.items())) or 'none'}), merged {c.merged}, set aside {c.quarantined}")
     print("timings    " + "  ".join(f"{k} {v:.2f} s" for k, v in r.seconds.items()))
-    return 0
+    for refusal in r.refused:
+        print(f"REFUSED: {refusal.reason}", file=sys.stderr)
+    return 2 if r.refused else 0
 
 
 def cmd_reconcile(a: argparse.Namespace) -> int:
-    with db.connect() as conn, db.agency_tx(conn, a.agency) as cur:
+    with db.connect() as conn, known_agency(conn, a.agency) as cur:
         res = reconcile(cur, a.agency, Path(a.feeds) if a.feeds else None)
     for line in res.lines:
         print(line)
@@ -92,7 +103,7 @@ def cmd_freshness(a: argparse.Namespace) -> int:
     code = 0
     with db.connect() as conn:
         for agency in a.agency:
-            with db.agency_tx(conn, agency) as cur:
+            with known_agency(conn, agency) as cur:
                 rows = freshness.check(cur, agency, max_age, now)
             print(f"freshness for {agency}")
             for row in rows:
@@ -103,7 +114,7 @@ def cmd_freshness(a: argparse.Namespace) -> int:
 
 
 def cmd_quality(a: argparse.Namespace) -> int:
-    with db.connect() as conn, db.agency_tx(conn, a.agency) as cur:
+    with db.connect() as conn, known_agency(conn, a.agency) as cur:
         rep = quality.quality_report(cur, a.agency)
     print(json.dumps(rep, indent=1, sort_keys=True) if a.json else quality.render(rep))
     return 0
@@ -112,14 +123,14 @@ def cmd_quality(a: argparse.Namespace) -> int:
 def cmd_evaluate(a: argparse.Namespace) -> int:
     key = ev.load_key(Path(a.key), a.agency)
     truth = ev.load_truth(Path(a.truth))
-    with db.connect() as conn, db.agency_tx(conn, a.agency) as cur:
+    with db.connect() as conn, known_agency(conn, a.agency) as cur:
         res = ev.evaluate(cur, a.agency, key, truth)
     print(json.dumps(res, indent=1, sort_keys=True) if a.json else ev.render(res))
     return 0
 
 
 def cmd_quarantine(a: argparse.Namespace) -> int:
-    with db.connect() as conn, db.agency_tx(conn, a.agency) as cur:
+    with db.connect() as conn, known_agency(conn, a.agency) as cur:
         rows = cur.execute("""SELECT q.record_id, q.reason_code, q.status, r.raw ->> CASE r.source WHEN 'sales' THEN 'address_full' ELSE 'address' END, q.detail
                               FROM quarantine q JOIN source_record r ON r.agency_id = q.agency_id AND r.record_id = q.record_id
                               WHERE q.agency_id = %s AND (%s::text IS NULL OR q.reason_code = %s) ORDER BY q.reason_code, q.record_id LIMIT %s""",
@@ -131,7 +142,7 @@ def cmd_quarantine(a: argparse.Namespace) -> int:
 
 
 def cmd_explain(a: argparse.Namespace) -> int:
-    with db.connect() as conn, db.agency_tx(conn, a.agency) as cur:
+    with db.connect() as conn, known_agency(conn, a.agency) as cur:
         row = cur.execute("""SELECT raw, norm_status, norm_rules, unit, level, building, lot, number_first, number_last, street_name, street_type, locality_key, state, postcode, contact_email, contact_phone
                              FROM source_record WHERE agency_id = %s AND record_id = %s""", (a.agency, a.record_id)).fetchone()
         if row is None:
@@ -166,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--feeds", required=True, help="folder with crm_export.csv, listing_feed.csv and sales_history.csv")
     p.add_argument("--threshold", type=float, help="minimum street name similarity for a near miss link (default 0.60)")
     p.add_argument("--lot-distance", type=float, help="metres a lot only record may be from a numbered address and still link (default 50)")
+    p.add_argument("--new-agency", action="store_true", help="start this agency with this run; without it an agency id that has never been loaded is refused, so a typo cannot start a second one")
     p.add_argument("--max-cluster", type=int, default=DEFAULT_MAX_CLUSTER, help="records one contact may hold before a mention is set aside")
     p.set_defaults(fn=cmd_run)
     p = sub.add_parser("reconcile", help="prove the counts add up (exit 1 when they do not)")

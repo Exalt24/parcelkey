@@ -329,3 +329,17 @@ def test_ensure_database_creates_a_missing_database_and_leaves_an_existing_one(a
     finally:
         with psycopg.connect(admin_dsn, autocommit=True) as c:
             c.execute(f'DROP DATABASE IF EXISTS "{tag}" WITH (FORCE)')
+
+
+# ---- an agency that was never loaded (P5-13) ----------------------------------------------------------------------------------------------------
+
+def test_require_agency_passes_a_started_agency_and_refuses_any_other(conn, admin):
+    admin.execute("insert into agency (agency_id) values (%s), ('agency-b')", (AGENCY,))
+    with db.agency_tx(conn, AGENCY) as cur:
+        assert db.agency_exists(cur, AGENCY) is True and db.agency_exists(cur, "agency-b") is False          # row level security shows a transaction only its own agency
+        db.require_agency(cur, AGENCY)
+        with pytest.raises(db.UnknownAgency, match="no agency 'typo' has been loaded: check the spelling$"):
+            db.require_agency(cur, "typo")
+        with pytest.raises(db.UnknownAgency, match="check the spelling, or pass --new-agency to start it with this run$"):
+            db.require_agency(cur, "typo", can_create=True)
+    assert issubclass(db.UnknownAgency, ValueError)

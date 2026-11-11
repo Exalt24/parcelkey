@@ -25,6 +25,8 @@ from pathlib import Path
 import psycopg
 from psycopg.types.json import Jsonb
 
+from .db import require_agency
+
 
 @dataclass(frozen=True)
 class SourceSpec:
@@ -104,9 +106,11 @@ def read_feed(path: Path, source: str) -> tuple[str, list[FeedRow]]:
     return sha, rows
 
 
-def ingest_file(cur: psycopg.Cursor, agency: str, source: str, path: Path, *, now: datetime | None = None) -> IngestResult:
-    """Store one feed file for one agency. Must run inside agency_tx for that agency."""
+def ingest_file(cur: psycopg.Cursor, agency: str, source: str, path: Path, *, now: datetime | None = None, new_agency: bool = False) -> IngestResult:
+    """Store one feed file for one agency. Must run inside agency_tx for that agency. An agency that has never been loaded is refused (UnknownAgency) unless `new_agency` says it is meant."""
     spec = SOURCES[source]
+    if not new_agency:
+        require_agency(cur, agency, can_create=True)
     sha, rows = read_feed(path, source)
     cur.execute("INSERT INTO agency (agency_id) VALUES (%s) ON CONFLICT DO NOTHING", (agency,))
     if cur.execute("SELECT 1 FROM source_load WHERE agency_id = %s AND source = %s AND file_sha256 = %s", (agency, source, sha)).fetchone():

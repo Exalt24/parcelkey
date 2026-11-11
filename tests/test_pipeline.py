@@ -240,7 +240,7 @@ def test_run_without_a_feed_folder_runs_only_the_later_stages(ref, conn, admin, 
     folder = h.write_feeds(tmp_path / "f", crm_rows=[h.crm("C1", "12 Smith St")])
     from parcelkey.ingest import ingest_file
     with db.agency_tx(conn, AGENCY) as cur:
-        ingest_file(cur, AGENCY, "crm", folder / "crm_export.csv")
+        ingest_file(cur, AGENCY, "crm", folder / "crm_export.csv", new_agency=True)
     r = h.run(conn, AGENCY, None)
     assert r.ingested == [] and r.normalised == 1 and r.match.linked == {"EXACT_KEY": 1}
 
@@ -272,7 +272,7 @@ def test_candidates_honour_the_floor_and_each_address_comes_back_once(ref, conn,
     from parcelkey.ingest import ingest_file
     from parcelkey.records import normalise_pending
     with db.agency_tx(conn, AGENCY) as cur:
-        ingest_file(cur, AGENCY, "crm", folder / "crm_export.csv")
+        ingest_file(cur, AGENCY, "crm", folder / "crm_export.csv", new_agency=True)
         normalise_pending(cur, AGENCY)
     with db.agency_tx(conn, AGENCY) as cur:
         wide = block.candidates(cur, AGENCY, ["crm:C1", "crm:NOPE"], 0.3)

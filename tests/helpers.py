@@ -98,6 +98,7 @@ def write_crm_text(folder: Path, text: str) -> Path:
 
 
 def run(conn, agency, folder, cfg: MatchConfig = MatchConfig(), **kw):
+    kw.setdefault("new_agency", True)          # a test starts its own agency; the tests of the refusal pass new_agency=False
     return run_agency(conn, agency, folder, cfg, **kw)
 
 

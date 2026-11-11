@@ -144,7 +144,7 @@ def blind_decisions(admin_dsn, tmp_path_factory):
             rows[inp["source"]].append(_feed_row(inp["source"], f"B{n:02d}", inp["raw"]))
     feeds = write_feeds(world / "feeds", crm_rows=rows["crm"], listing_rows=rows["listing"], sales_rows=rows["sales"])
     with db.connect() as conn:
-        run_agency(conn, BLIND_AGENCY, feeds)
+        run_agency(conn, BLIND_AGENCY, feeds, new_agency=True)
     with psycopg.connect(admin_dsn, autocommit=True) as admin:
         admin.execute(f"set search_path = {db.SCHEMA}, public")
         found = decisions(admin, BLIND_AGENCY)

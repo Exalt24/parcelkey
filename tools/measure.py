@@ -40,7 +40,7 @@ def run_once(seed_dir: Path, cfg: MatchConfig, *, verbose: bool) -> dict:
     truth = ev.load_truth(truth_path)
     with db.connect() as conn:
         for agency in AGENCIES:
-            report = run_agency(conn, agency, seed_dir / agency, cfg)
+            report = run_agency(conn, agency, seed_dir / agency, cfg, new_agency=True)
             with db.agency_tx(conn, agency) as cur:
                 res = ev.evaluate(cur, agency, ev.load_key(key_path, agency), truth)
                 rec = reconcile(cur, agency, seed_dir / agency)

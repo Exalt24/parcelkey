@@ -60,7 +60,7 @@ def cli(*args, check=False):
 def test_run_reconcile_explain_quarantine_quality_through_the_command_line(hand, clean, tmp_path):
     hand(REFERENCE)
     folder = h.write_feeds(tmp_path / "feeds", crm_rows=[h.crm("C1", "12 Smith St", name="Kate", email="kate@example.com"), h.crm("C2", "Unit 99, 30 Smith St"), h.crm("C3", "18 Smith St")])
-    p = cli("run", "--agency", AGENCY, "--feeds", str(folder), check=True)
+    p = cli("run", "--agency", AGENCY, "--feeds", str(folder), "--new-agency", check=True)
     assert "ingest     crm" in p.stdout and "linked 2 (EXACT_KEY 1, NEW_DERIVED 1)" in p.stdout and "quarantined 1 (UNIT_CONFLICT 1)" in p.stdout and "timings" in p.stdout
     assert "skipped" in cli("run", "--agency", AGENCY, "--feeds", str(folder), check=True).stdout
     p = cli("reconcile", "--agency", AGENCY, "--feeds", str(folder))
@@ -81,7 +81,7 @@ def test_run_reconcile_explain_quarantine_quality_through_the_command_line(hand,
 def test_reconcile_exits_1_when_the_counts_do_not_add_up(hand, clean, admin, tmp_path):
     hand(REFERENCE)
     folder = h.write_feeds(tmp_path / "feeds", crm_rows=[h.crm("C1", "12 Smith St")])
-    cli("run", "--agency", AGENCY, "--feeds", str(folder), check=True)
+    cli("run", "--agency", AGENCY, "--feeds", str(folder), "--new-agency", check=True)
     admin.execute("delete from property_link")
     p = cli("reconcile", "--agency", AGENCY)
     assert p.returncode == 1 and "FAIL ACCOUNTED" in p.stdout and "NOT RECONCILED" in p.stdout
@@ -90,7 +90,7 @@ def test_reconcile_exits_1_when_the_counts_do_not_add_up(hand, clean, admin, tmp
 def test_freshness_exits_1_when_stale_and_0_when_fresh(hand, clean, tmp_path):
     hand(REFERENCE)
     folder = h.write_feeds(tmp_path / "feeds", crm_rows=[h.crm("C1", "12 Smith St")])
-    cli("run", "--agency", AGENCY, "--feeds", str(folder), check=True)
+    cli("run", "--agency", AGENCY, "--feeds", str(folder), "--new-agency", check=True)
     fresh = cli("freshness", "--agency", AGENCY, "--max-age", "crm=24", "--max-age", "listing=24", "--max-age", "sales=24")
     assert fresh.returncode == 1 and "MISSING" in fresh.stdout                           # listing and sales never arrived
     only = cli("freshness", "--agency", AGENCY, "--max-age", "listing=24", "--max-age", "sales=24", "--now", "2000-01-01T00:00:00+00:00")
@@ -109,13 +109,13 @@ def test_a_refused_feed_exits_2_and_writes_nothing(hand, clean, admin, tmp_path)
     folder = tmp_path / "feeds"
     folder.mkdir()
     (folder / "crm_export.csv").write_text("contact_ref,address\nC1,12 Smith St\n", encoding="utf-8")
-    p = cli("run", "--agency", AGENCY, "--feeds", str(folder))
+    p = cli("run", "--agency", AGENCY, "--feeds", str(folder), "--new-agency")
     assert p.returncode == 2 and "REFUSED" in p.stderr and "full_name" in p.stderr
     assert admin.execute("select count(*) from source_record").fetchone()[0] == 0
 
 
 def test_evaluate_and_threshold_options(world, tmp_path):
-    p = cli("run", "--agency", "agency-a", "--feeds", str(world / "agency-a"), "--threshold", "0.5", "--lot-distance", "80", check=True)
+    p = cli("run", "--agency", "agency-a", "--feeds", str(world / "agency-a"), "--threshold", "0.5", "--lot-distance", "80", "--new-agency", check=True)
     assert "match" in p.stdout
     e = cli("evaluate", "--agency", "agency-a", "--key", str(world / "answer_key.csv"), "--truth", str(world / "truth_properties.csv"), check=True)
     assert "precision" in e.stdout and "contact class" in e.stdout

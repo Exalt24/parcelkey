@@ -19,7 +19,7 @@ pytestmark = pytest.mark.db
 
 def ingest(conn, path, source, **kw):
     with agency_tx(conn, AGENCY) as cur:
-        return ingest_file(cur, AGENCY, source, path, **kw)
+        return ingest_file(cur, AGENCY, source, path, **{"new_agency": True, **kw})
 
 
 def test_rows_are_stored_as_received(conn, admin, tmp_path):
@@ -297,3 +297,30 @@ def test_a_new_file_that_stores_a_row_is_loaded_and_a_skipped_file_has_no_reason
     r = ingest(conn, folder / "crm_export.csv", "crm")
     assert (r.status, r.stored, r.rejected, r.reject_reasons) == ("loaded", 1, 1, {"DUPLICATE_REF": 1})
     assert ingest(conn, folder / "crm_export.csv", "crm").reject_reasons == {}
+
+
+# ---- an agency that was never loaded (P5-13) ----------------------------------------------------------------------------------------------------
+
+def test_ingest_refuses_an_agency_that_was_never_loaded_unless_it_is_meant(conn, admin, tmp_path):
+    folder = h.write_feeds(tmp_path / "f", crm_rows=[h.crm("C1", "12 Smith St")])
+    with pytest.raises(db.UnknownAgency, match="no agency 'agency-a' has been loaded.*--new-agency"):
+        ingest(conn, folder / "crm_export.csv", "crm", new_agency=False)
+    assert admin.execute("select (select count(*) from agency) + (select count(*) from source_load) + (select count(*) from source_record)").fetchone()[0] == 0
+    assert ingest(conn, folder / "crm_export.csv", "crm", new_agency=True).status == "loaded"
+    other = h.write_feeds(tmp_path / "g", crm_rows=[h.crm("C2", "14 Smith St")])
+    assert ingest(conn, other / "crm_export.csv", "crm", new_agency=False).status == "loaded"          # the agency exists now, so no flag is needed
+
+
+def test_the_default_is_to_refuse_an_unknown_agency(conn, admin, tmp_path):
+    folder = h.write_feeds(tmp_path / "f", crm_rows=[h.crm("C1", "12 Smith St")])
+    with pytest.raises(db.UnknownAgency):
+        with agency_tx(conn, AGENCY) as cur:
+            ingest_file(cur, AGENCY, "crm", folder / "crm_export.csv")
+
+
+def test_a_refused_feed_does_not_start_a_new_agency(conn, admin, tmp_path):
+    p = tmp_path / "crm_export.csv"
+    p.write_text("contact_ref,address\nC1,12 Smith St\n", encoding="utf-8")
+    with pytest.raises(FeedRefused):
+        ingest(conn, p, "crm", new_agency=True)
+    assert admin.execute("select count(*) from agency").fetchone()[0] == 0
