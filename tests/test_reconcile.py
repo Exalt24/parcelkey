@@ -462,3 +462,44 @@ def test_a_feed_file_that_cannot_be_read_is_a_finding_and_not_a_crash(done, tmp_
     (other / "crm_export.csv").write_bytes(content)
     res = check(conn, other)
     assert names(res) == ["FILE_ROWS"] and "cannot be read as the crm feed" in str(res.findings[0]) and why in str(res.findings[0])
+
+
+# ---- a re-sent file that was not applied is a finding (P5-3) ------------------------------------------------------------------------------------------
+
+def test_a_re_sent_feed_with_corrected_rows_is_rejected_and_reconcile_says_the_file_was_not_applied(hand, conn, admin, tmp_path):
+    hand(REFERENCE)
+    v1 = h.write_feeds(tmp_path / "v1", crm_rows=[h.crm("C1", "12 Smith St"), h.crm("C2", "14 Smith St")])
+    v2 = h.write_feeds(tmp_path / "v2", crm_rows=[h.crm("C1", "99 Corrected Rd"), h.crm("C2", "14 Smith St")])
+    h.run(conn, AGENCY, v1)
+    r = h.run(conn, AGENCY, v2)
+    assert [(i.status, i.stored, i.rejected, i.unchanged, i.reject_reasons) for i in r.ingested] == [("stored_nothing", 0, 1, 1, {"CHANGED_AFTER_LOAD": 1})]
+    res = check(conn, v2)
+    assert names(res) == ["FILE_NOT_APPLIED"] and "1 reference(s) in the file are stored with different content" in str(res.findings[0]) and "(for example C1)" in str(res.findings[0])
+    line = next(line for line in res.lines if line.startswith("file       "))
+    assert "rejected as CHANGED_AFTER_LOAD 1" in line and "1 of 2 references stored with other content" in line
+
+
+def test_class_a_file_the_database_agrees_with_has_no_reference_stored_with_other_content(hand, conn, admin, tmp_path):
+    """CLASS-TABLE: the same file loaded, the same rows re-sent in other bytes, a repeated reference whose first row is the stored one, and a later file that only adds rows all agree with the database."""
+    hand(REFERENCE)
+    v1 = h.write_feeds(tmp_path / "v1", crm_rows=[h.crm("C1", "12 Smith St"), h.crm("C2", "14 Smith St")])
+    other_bytes = h.write_crm_text(tmp_path / "v2", h.crm_text(h.crm_line("C1", "12 Smith St"), "", h.crm_line("C2", "14 Smith St")))
+    repeated = h.write_crm_text(tmp_path / "v3", h.crm_text(h.crm_line("C1", "12 Smith St"), h.crm_line("C1", "77 Other Rd"), h.crm_line("C2", "14 Smith St")))
+    more = h.write_feeds(tmp_path / "v4", crm_rows=[h.crm("C1", "12 Smith St"), h.crm("C2", "14 Smith St"), h.crm("C3", "18 Smith St")])
+    h.run(conn, AGENCY, v1)
+    for name, folder in {"the same file": v1, "other bytes": other_bytes, "a repeated reference": repeated, "a later file that adds a row": more}.items():
+        h.run(conn, AGENCY, folder)
+        res = check(conn, folder)
+        assert res.ok, (name, [str(f) for f in res.findings])
+        assert "0 of " in next(line for line in res.lines if line.startswith("file       ")), name
+
+
+def test_a_reference_stored_by_an_earlier_load_and_damaged_in_the_database_is_found_against_the_file(done):
+    conn, admin, folder = done
+    other_folder = folder.parent / "next"
+    other_folder.mkdir()
+    (other_folder / "listing_feed.csv").write_bytes((folder / "listing_feed.csv").read_bytes() + b"\n")          # a later load of the same rows, so the damaged row belongs to an earlier load
+    h.run(conn, AGENCY, other_folder)
+    admin.execute("""update source_record set raw = jsonb_set(raw, '{address}', '"99 Changed Rd"') where record_id = 'listing:L1'""")
+    res = check(conn, other_folder)
+    assert "FILE_NOT_APPLIED" in names(res) and "RAW_STORED" not in names(res)

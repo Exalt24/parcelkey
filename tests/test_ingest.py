@@ -266,3 +266,34 @@ def test_the_feed_reader_is_the_only_place_the_package_reads_a_feed_file():
     root = Path(__file__).resolve().parent.parent / "parcelkey"
     users = sorted(p.name for p in root.glob("*.py") if "import csv" in p.read_text(encoding="utf-8"))
     assert users == ["evaluate.py", "ingest.py"]
+
+
+# ---- a load has a load time only when it stored a row (P5-3) ------------------------------------------------------------------------------------------
+
+def test_a_file_that_stores_nothing_is_recorded_with_its_rejects_and_no_load_time(conn, admin, tmp_path):
+    a = h.write_feeds(tmp_path / "a", crm_rows=[h.crm("C1", "12 Smith St"), h.crm("C2", "14 Smith St")])
+    b = h.write_feeds(tmp_path / "b", crm_rows=[h.crm("C1", "99 Changed Rd"), h.crm("C2", " "), h.crm("", "5 Rose Rd")])
+    first = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    later = datetime(2026, 2, 3, 4, 5, 6, tzinfo=timezone.utc)
+    assert ingest(conn, a / "crm_export.csv", "crm", now=first).status == "loaded"
+    r = ingest(conn, b / "crm_export.csv", "crm", now=later)
+    assert (r.status, r.row_count, r.stored, r.rejected, r.unchanged) == ("stored_nothing", 3, 0, 3, 0)
+    assert r.reject_reasons == {"CHANGED_AFTER_LOAD": 1, "BLANK_ADDRESS": 1, "MISSING_REF": 1}
+    assert admin.execute("select stored, rejected, loaded_at, received_at from source_load order by load_id").fetchall() == [(2, 0, first, first), (0, 3, None, later)]
+    assert admin.execute("select distinct loaded_at from source_record").fetchall() == [(first,)]
+
+
+def test_a_file_of_only_unchanged_rows_stores_nothing_and_says_so(conn, admin, tmp_path):
+    a = h.write_feeds(tmp_path / "a", crm_rows=[h.crm("C1", "12 Smith St")])
+    b = h.write_crm_text(tmp_path / "b", h.crm_text(h.crm_line("C1", "12 Smith St"), ""))
+    ingest(conn, a / "crm_export.csv", "crm")
+    r = ingest(conn, b / "crm_export.csv", "crm")
+    assert (r.status, r.stored, r.rejected, r.unchanged, r.reject_reasons) == ("stored_nothing", 0, 0, 1, {})
+    assert admin.execute("select loaded_at is null from source_load order by load_id").fetchall() == [(False,), (True,)]
+
+
+def test_a_new_file_that_stores_a_row_is_loaded_and_a_skipped_file_has_no_reasons(conn, tmp_path):
+    folder = h.write_feeds(tmp_path / "f", crm_rows=[h.crm("C1", "12 Smith St"), h.crm("C1", "99 Dup St")])
+    r = ingest(conn, folder / "crm_export.csv", "crm")
+    assert (r.status, r.stored, r.rejected, r.reject_reasons) == ("loaded", 1, 1, {"DUPLICATE_REF": 1})
+    assert ingest(conn, folder / "crm_export.csv", "crm").reject_reasons == {}

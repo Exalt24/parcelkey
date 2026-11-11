@@ -3,6 +3,9 @@
 Three sample feeds are known: a CRM export, a listing feed and a sales history. Each has a column map (`SOURCES`). A feed whose header lacks a mapped column is
 refused whole, before any row is written, with the missing names. A file is identified by its SHA-256: loading the same bytes again writes nothing.
 
+A load has a `loaded_at` only when it stored a row. A file whose rows were all rejected or unchanged is recorded (with `received_at`) and has no `loaded_at`, so the freshness
+monitor measures the last time a feed changed what is stored, never the last time a file arrived.
+
 Rows that cannot be stored go to `ingest_reject` with a reason: more cells than the header has (EXTRA_CELLS), no reference, a blank address, the same reference twice in
 one file, or a reference that was stored earlier with different content. Nothing is dropped without a row saying why.
 
@@ -15,7 +18,7 @@ import csv
 import hashlib
 import io
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -57,11 +60,12 @@ class FeedRefused(ValueError):
 class IngestResult:
     source: str
     file: str
-    status: str                 # loaded | skipped (same bytes loaded before)
+    status: str                 # loaded (stored a row) | stored_nothing (a new file whose rows were all rejected or unchanged) | skipped (same bytes loaded before)
     row_count: int = 0
     stored: int = 0
     rejected: int = 0
     unchanged: int = 0
+    reject_reasons: dict[str, int] = field(default_factory=dict)          # reason code -> rows of this file
 
 
 def row_sha(raw: dict[str, str]) -> str:
@@ -107,12 +111,13 @@ def ingest_file(cur: psycopg.Cursor, agency: str, source: str, path: Path, *, no
     cur.execute("INSERT INTO agency (agency_id) VALUES (%s) ON CONFLICT DO NOTHING", (agency,))
     if cur.execute("SELECT 1 FROM source_load WHERE agency_id = %s AND source = %s AND file_sha256 = %s", (agency, source, sha)).fetchone():
         return IngestResult(source, Path(path).name, "skipped")
-    loaded_at = now or datetime.now(timezone.utc)
-    load_id = cur.execute("""INSERT INTO source_load (agency_id, source, file_name, file_sha256, row_count, stored, rejected, unchanged, loaded_at) VALUES (%s, %s, %s, %s, 0, 0, 0, 0, %s)
-                             RETURNING load_id""", (agency, source, Path(path).name, sha, loaded_at)).fetchone()[0]
+    received_at = now or datetime.now(timezone.utc)
+    load_id = cur.execute("""INSERT INTO source_load (agency_id, source, file_name, file_sha256, row_count, stored, rejected, unchanged, received_at) VALUES (%s, %s, %s, %s, 0, 0, 0, 0, %s)
+                             RETURNING load_id""", (agency, source, Path(path).name, sha, received_at)).fetchone()[0]
     existing = {r[0]: r[1] for r in cur.execute("SELECT source_ref, raw_sha256 FROM source_record WHERE agency_id = %s AND source = %s", (agency, source)).fetchall()}
     seen: set[str] = set()
     stored = rejected = unchanged = 0
+    reasons: dict[str, int] = {}
     for line_no, raw, extra in ((r.line_no, r.raw, r.extra) for r in rows):
         ref = raw.get(spec.ref, "").strip()
         reason = None
@@ -135,10 +140,12 @@ def ingest_file(cur: psycopg.Cursor, agency: str, source: str, path: Path, *, no
             cur.execute("""INSERT INTO ingest_reject (agency_id, source, file_sha256, line_no, reason_code, reason, raw) VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                         (agency, source, sha, line_no, reason[0], reason[1], Jsonb(raw)))
             rejected += 1
+            reasons[reason[0]] = reasons.get(reason[0], 0) + 1
             continue
         seen.add(ref)
         cur.execute("""INSERT INTO source_record (agency_id, record_id, source, source_ref, load_id, line_no, raw, raw_sha256, loaded_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                    (agency, f"{source}:{ref}", source, ref, load_id, line_no, Jsonb(raw), row_sha(raw), loaded_at))
+                    (agency, f"{source}:{ref}", source, ref, load_id, line_no, Jsonb(raw), row_sha(raw), received_at))
         stored += 1
-    cur.execute("UPDATE source_load SET row_count = %s, stored = %s, rejected = %s, unchanged = %s WHERE agency_id = %s AND load_id = %s", (len(rows), stored, rejected, unchanged, agency, load_id))
-    return IngestResult(source, Path(path).name, "loaded", len(rows), stored, rejected, unchanged)
+    cur.execute("UPDATE source_load SET row_count = %s, stored = %s, rejected = %s, unchanged = %s, loaded_at = CASE WHEN %s > 0 THEN %s END WHERE agency_id = %s AND load_id = %s",
+                (len(rows), stored, rejected, unchanged, stored, received_at, agency, load_id))
+    return IngestResult(source, Path(path).name, "loaded" if stored else "stored_nothing", len(rows), stored, rejected, unchanged, reasons)

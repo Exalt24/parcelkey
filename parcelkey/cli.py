@@ -44,11 +44,23 @@ def cmd_load_gnaf(a: argparse.Namespace) -> int:
     return 0
 
 
+def ingest_line(i) -> str:
+    """One line for one ingested file: what happened, the counts, and why rows were rejected."""
+    text = f"ingest     {i.source:8} {i.file}: {i.status}"
+    if i.status != "skipped":
+        text += f", {i.row_count} rows, stored {i.stored}, rejected {i.rejected}, unchanged {i.unchanged}"
+        if i.reject_reasons:
+            text += " (" + ", ".join(f"{k} {v}" for k, v in sorted(i.reject_reasons.items())) + ")"
+        if i.status == "stored_nothing":
+            text += "; nothing was stored, so this source's age did not move"
+    return text
+
+
 def cmd_run(a: argparse.Namespace) -> int:
     with db.connect() as conn:
         r = run_agency(conn, a.agency, Path(a.feeds), _cfg(a), max_cluster=a.max_cluster)
     for i in r.ingested:
-        print(f"ingest     {i.source:8} {i.file}: {i.status}" + (f", {i.row_count} rows, stored {i.stored}, rejected {i.rejected}, unchanged {i.unchanged}" if i.status == "loaded" else ""))
+        print(ingest_line(i))
     m = r.match
     print(f"normalise  {r.normalised} records")
     print(f"match      {m.records} decided: linked {sum(m.linked.values())} ({', '.join(f'{k} {v}' for k, v in sorted(m.linked.items())) or 'none'}), "

@@ -4,6 +4,8 @@ Checks, each reported by name (exit code 1 when any fails):
   FILE_ROWS        every row of a feed file is stored, rejected or unchanged (the file is read with `ingest.read_feed`, the one reader the loader uses, so a blank line, a short
                    row or a repeated reference counts the same way in both); a feed file that cannot be read as its feed is a finding, not a crash
   RAW_STORED       each stored raw row equals the file row it came from (matched by line number), field by field
+  FILE_NOT_APPLIED every reference in the file that an EARLIER load stored has the content the file gives it (RAW_STORED covers the rows this load stored). A corrected row in a re-sent feed is rejected as CHANGED_AFTER_LOAD and the stored
+                   row stays: the file then says one thing and the database another, and this check says so (a repeated reference passes when any of its rows is the stored one)
   ACCOUNTED        every source record is linked or in open quarantine, never both, never neither, and none is still pending
   NO_ORPHAN        no link points at a missing record or a missing property; no quarantine row at a missing record
   ONE_ID           no property has two ids and no two properties share a G-NAF pid or a derived key; each id is the one its derivation gives
@@ -83,7 +85,19 @@ def reconcile(cur: psycopg.Cursor, agency: str, feeds_dir: Path | None = None) -
                     bad += 1
             if bad:
                 fail("RAW_STORED", f"{path.name}: {bad} stored rows differ from the file")
-            res.lines.append(f"file       {path.name}: {len(rows)} rows = stored {stored} + rejected {rejected} + unchanged {unchanged}")
+            file_by_ref: dict[str, list[dict[str, str]]] = {}
+            for r in rows:
+                ref = r.raw.get(spec.ref, "").strip()
+                if ref and not r.extra:
+                    file_by_ref.setdefault(ref, []).append(r.raw)
+            stored_by_ref = dict(cur.execute("SELECT source_ref, raw FROM source_record WHERE agency_id = %s AND source = %s AND load_id <> %s", (agency, source, load_id)).fetchall())
+            differ = sorted(ref for ref, raws in file_by_ref.items() if ref in stored_by_ref and stored_by_ref[ref] not in raws)
+            if differ:
+                fail("FILE_NOT_APPLIED", f"{path.name}: {len(differ)} reference(s) in the file are stored with different content, so the file was not applied (for example {differ[0]})")
+            reasons = cur.execute("SELECT r.reason_code, count(*) FROM ingest_reject r JOIN source_load l ON l.agency_id = r.agency_id AND l.file_sha256 = r.file_sha256 AND l.source = r.source "
+                                  "WHERE r.agency_id = %s AND l.load_id = %s GROUP BY 1 ORDER BY 1", (agency, load_id)).fetchall()
+            res.lines.append(f"file       {path.name}: {len(rows)} rows = stored {stored} + rejected {rejected} + unchanged {unchanged}"
+                             + (f"; rejected as {', '.join(f'{code} {n}' for code, n in reasons)}" if reasons else "") + f"; {len(differ)} of {len(file_by_ref)} references stored with other content")
 
     total = cur.execute("SELECT count(*) FROM source_record WHERE agency_id = %s", (agency,)).fetchone()[0]
     linked = cur.execute("SELECT count(*) FROM property_link WHERE agency_id = %s", (agency,)).fetchone()[0]
