@@ -188,3 +188,144 @@ def test_the_unsafe_connection_is_closed_before_the_refusal_is_raised(admin_dsn)
 
 def test_a_safe_connection_is_returned_open_and_idle(conn):
     assert conn.closed is False and conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+
+
+# ---- the tests and the measure script never touch the demo database --------------------------------------------------------------------------------
+
+DEMO_DSN = "host=localhost port=5436 dbname=parcelkey user=postgres password=x"
+NOWHERE_DSN = "host=nowhere.invalid port=1 dbname={name} user=postgres password=x connect_timeout=1"
+
+
+def test_the_tests_run_in_their_own_database_and_not_the_demo_one(admin_dsn, conn):
+    """P5-1: the README's Run it steps fill the demo database; the suite empties tables all the time, so it must be somewhere else."""
+    assert db.database_name(admin_dsn) != db.DEMO_DB and db.database_name(db.default_dsn()) == db.database_name(admin_dsn)
+    assert conn.execute("select current_database()").fetchone()[0] == db.database_name(admin_dsn)
+    assert (db.DEMO_DB, db.TEST_DB, db.MEASURE_DB) == ("parcelkey", "parcelkey_test", "parcelkey_measure")
+
+
+@pytest.mark.parametrize("dsn, refused", [
+    (DEMO_DSN, True), ("dbname=parcelkey host=h", True), ("host=h dbname=parcelkey_test", False), ("host=h dbname=parcelkey_measure", False), ("host=h dbname=Parcelkey", False),
+    ("host=h dbname=postgres", False)])
+def test_refuse_demo_database_names_only_the_demo_database(dsn, refused):
+    if refused:
+        with pytest.raises(RuntimeError, match="demo database 'parcelkey'"):
+            db.refuse_demo_database(dsn)
+    else:
+        db.refuse_demo_database(dsn)
+
+
+def test_refuse_demo_database_checks_every_string_it_is_given():
+    db.refuse_demo_database("dbname=a", "dbname=b")
+    with pytest.raises(RuntimeError):
+        db.refuse_demo_database("dbname=a", DEMO_DSN)
+    with pytest.raises(RuntimeError):
+        db.refuse_demo_database(DEMO_DSN, "dbname=a")
+
+
+@pytest.mark.parametrize("call", ["wipe", "wipe_reference"])
+def test_every_function_that_empties_tables_refuses_the_demo_database_before_it_connects(call):
+    """CLASS: a function that truncates takes the guard first. The address is not reachable, so a connection attempt would be a different error."""
+    fn = getattr(db, call)
+    with pytest.raises(RuntimeError, match="demo database"):
+        fn(NOWHERE_DSN.format(name=db.DEMO_DB))
+    with pytest.raises(psycopg.OperationalError):          # a database that is not the demo one gets as far as a connection
+        fn(NOWHERE_DSN.format(name="somewhere_else"))
+
+
+def test_every_truncate_in_the_package_and_the_tools_sits_in_a_guarded_function_or_a_reference_rebuild():
+    """CLASS: nothing new empties tables without the guard. The only other TRUNCATE is gnaf.build_reference, which rebuilds the flat table from the tables it was just given."""
+    import ast
+    from pathlib import Path
+    root = Path(db.__file__).resolve().parent.parent
+    found: dict[str, list[str]] = {}
+    for path in [*(root / "parcelkey").glob("*.py"), *(root / "tools").glob("*.py")]:
+        source = path.read_text(encoding="utf-8")
+        for fn in (n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef)):
+            text = ast.get_source_segment(source, fn) or ""
+            if "TRUNCATE" in text.upper():
+                found.setdefault(path.name, []).append(fn.name)
+                if path.name == "db.py":
+                    assert "refuse_demo_database(" in text, f"{fn.name} empties tables without refusing the demo database"
+    assert found == {"db.py": ["wipe", "wipe_reference"], "gnaf.py": ["build_reference"]}
+
+
+def test_aim_at_sets_the_database_name_and_drops_a_lone_dsn(clear_database_env):
+    import os
+    mp = clear_database_env
+    db.aim_at("pk_x")
+    assert os.environ["PARCELKEY_PG_DB"] == "pk_x"
+    mp.setenv("PARCELKEY_DSN", "dbname=elsewhere")
+    db.aim_at("pk_y")
+    assert os.environ["PARCELKEY_PG_DB"] == "pk_y" and "PARCELKEY_DSN" not in os.environ
+    mp.setenv("PARCELKEY_ADMIN_DSN", "dbname=elsewhere")
+    db.aim_at("pk_z")
+    assert os.environ["PARCELKEY_PG_DB"] == "pk_z" and "PARCELKEY_ADMIN_DSN" not in os.environ
+
+
+def test_aim_at_keeps_a_pair_of_dsns_the_environment_names(clear_database_env):
+    """The mutation check gives each worker its own database through the two DSNs; they win over the name."""
+    import os
+    mp = clear_database_env
+    mp.setenv("PARCELKEY_DSN", "dbname=worker user=a")
+    mp.setenv("PARCELKEY_ADMIN_DSN", "dbname=worker user=b")
+    db.aim_at("pk_x")
+    assert os.environ["PARCELKEY_DSN"] == "dbname=worker user=a" and os.environ["PARCELKEY_ADMIN_DSN"] == "dbname=worker user=b" and "PARCELKEY_PG_DB" not in os.environ
+
+
+def test_select_database_refuses_the_demo_database_however_it_is_named(clear_database_env):
+    mp = clear_database_env
+    mp.setenv("PARCELKEY_APP_PASSWORD", "a")
+    mp.setenv("PARCELKEY_ADMIN_PASSWORD", "b")
+    with pytest.raises(RuntimeError, match="demo database"):
+        db.select_database(db.DEMO_DB)
+    mp.setenv("PARCELKEY_DSN", f"dbname={db.DEMO_DB} user=parcelkey_app")
+    mp.setenv("PARCELKEY_ADMIN_DSN", f"dbname={db.DEMO_DB} user=postgres")
+    with pytest.raises(RuntimeError, match="demo database"):
+        db.select_database(db.TEST_DB)
+    mp.setenv("PARCELKEY_ADMIN_DSN", f"dbname={db.TEST_DB} user=postgres")
+    with pytest.raises(RuntimeError, match="demo database"):          # one DSN on the demo database is enough
+        db.select_database(db.TEST_DB)
+
+
+def test_select_database_wants_one_database_for_both_roles(clear_database_env):
+    mp = clear_database_env
+    mp.setenv("PARCELKEY_DSN", "dbname=one user=parcelkey_app")
+    mp.setenv("PARCELKEY_ADMIN_DSN", "dbname=two user=postgres")
+    with pytest.raises(RuntimeError, match="must be one database"):
+        db.select_database("whatever")
+
+
+def test_select_database_returns_both_strings_aimed_at_the_name(clear_database_env):
+    mp = clear_database_env
+    mp.setenv("PARCELKEY_APP_PASSWORD", "a")
+    mp.setenv("PARCELKEY_ADMIN_PASSWORD", "b")
+    admin, app = db.select_database("pk_named")
+    assert (db.database_name(admin), db.database_name(app)) == ("pk_named", "pk_named")
+
+
+def test_use_own_database_makes_the_database_and_its_schema_and_runs_again_without_harm(clear_database_env, admin_dsn):
+    tag = "pk_t" + secrets.token_hex(3)
+    try:
+        admin, app = db.use_own_database(tag)
+        with psycopg.connect(admin) as c:
+            assert c.execute("select current_database()").fetchone()[0] == tag
+            assert c.execute("select count(*) from pg_tables where schemaname = %s and tablename = 'source_record'", (db.SCHEMA,)).fetchone()[0] == 1
+        db.use_own_database(tag)                          # a second call finds it and leaves it
+        with psycopg.connect(admin_dsn, autocommit=True) as c:
+            assert c.execute("select count(*) from pg_database where datname = %s", (tag,)).fetchone()[0] == 1
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as c:
+            c.execute(f'DROP DATABASE IF EXISTS "{tag}" WITH (FORCE)')
+
+
+def test_ensure_database_creates_a_missing_database_and_leaves_an_existing_one(admin_dsn):
+    tag = "pk_t" + secrets.token_hex(3)
+    dsn = db.retarget(admin_dsn, dbname=tag)
+    try:
+        for _ in range(2):
+            db.ensure_database(dsn)
+            with psycopg.connect(admin_dsn) as c:
+                assert c.execute("select count(*) from pg_database where datname = %s", (tag,)).fetchone()[0] == 1
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as c:
+            c.execute(f'DROP DATABASE IF EXISTS "{tag}" WITH (FORCE)')

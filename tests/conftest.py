@@ -1,6 +1,8 @@
 """Shared fixtures. Tests that need PostgreSQL FAIL when it is not there; they never skip.
 
-Start the database with `python tools/pg.py up` (Docker, PostGIS image, port 5436). CI starts a service container on the same port.
+Start the server with `python tools/pg.py up` (Docker, PostGIS image, port 5436). CI starts a service container on the same port.
+The tests empty tables all the time, so they run in their own database on that server (`parcelkey_test`, made on the first run) and never in the demo database the README's
+Run it steps fill. A run that would point at the demo database fails before it writes anything.
 """
 from __future__ import annotations
 
@@ -21,6 +23,8 @@ from parcelkey import db, gnaf  # noqa: E402
 
 import seed as gen  # noqa: E402
 
+db.aim_at(db.TEST_DB)          # before any test reads a connection string; a mutation worker that names both DSNs keeps its own database
+
 settings.register_profile("default", max_examples=int(os.environ.get("PARCELKEY_EXAMPLES", "60")), deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow])
 settings.load_profile("default")
 
@@ -32,7 +36,8 @@ _STATE = {"reference": ""}        # which reference the database holds right now
 @pytest.fixture(scope="session")
 def admin_dsn() -> str:
     try:
-        dsn = db.default_admin_dsn()
+        dsn, _ = db.select_database(db.TEST_DB)
+        db.ensure_database(dsn)
         with psycopg.connect(dsn, connect_timeout=5) as conn:
             conn.execute("select 1")
     except psycopg.Error as exc:
@@ -41,6 +46,15 @@ def admin_dsn() -> str:
         pytest.fail(f"{exc}", pytrace=False)
     db.init_db(dsn)
     return dsn
+
+
+@pytest.fixture()
+def clear_database_env(monkeypatch):
+    """Forget the database settings for one test, and put them back after it (the setenv first makes monkeypatch remember a variable that was not set)."""
+    for var in ("PARCELKEY_DSN", "PARCELKEY_ADMIN_DSN", "PARCELKEY_PG_DB"):
+        monkeypatch.setenv(var, "x")
+        monkeypatch.delenv(var)
+    return monkeypatch
 
 
 @pytest.fixture()

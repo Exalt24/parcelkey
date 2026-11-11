@@ -70,7 +70,7 @@ Which defect classes were resolved, set aside or missed is in [docs/results.md](
 
 ## Run it
 
-You need Python 3.11 or newer and Docker. PostgreSQL 16 with PostGIS runs in a container on port 5436. There are no accounts or keys. The first `python tools/pg.py up` pulls the `postgis/postgis:16-3.4` image, which takes a few minutes on a slow link, and `pip install` fetches three packages.
+You need Python 3.11 or newer and Docker. PostgreSQL 16 with PostGIS runs in a container on port 5436, with three databases that never share data: `parcelkey` is the demo database that every `python -m parcelkey` command below fills, `parcelkey_test` is the one `python -m pytest` empties and refills, and `parcelkey_measure` is the one `tools/measure.py` empties and refills. The tests and the measure script refuse to run against `parcelkey`, so running them does not wipe what you just loaded. There are no accounts or keys. The first `python tools/pg.py up` pulls the `postgis/postgis:16-3.4` image, which takes a few minutes on a slow link, and `pip install` fetches three packages.
 
 ```
 python -m venv .venv
@@ -84,13 +84,13 @@ python -m parcelkey reconcile --agency agency-a --feeds out/seed/agency-a
 python -m parcelkey evaluate --agency agency-a --key out/seed/answer_key.csv --truth out/seed/truth_properties.csv
 ```
 
-Also `quality`, `freshness --agency agency-a --max-age crm=168`, `quarantine --agency agency-a --reason UNIT_CONFLICT`, and `explain --agency agency-a crm:C00042`, which prints one record's raw row, its normalised parts, the rules that fired and what was decided. `python tools/measure.py --seed-dir out/seed` runs both agencies; `--sweep 0.5,0.6,0.7` runs once per similarity threshold. `python tools/pg.py down` removes the container.
+Also `quality`, `freshness --agency agency-a --max-age crm=168`, `quarantine --agency agency-a --reason UNIT_CONFLICT`, and `explain --agency agency-a crm:C00042`, which prints one record's raw row, its normalised parts, the rules that fired and what was decided. `python tools/measure.py --seed-dir out/seed` runs both agencies in `parcelkey_measure`, not in the demo database; `--sweep 0.5,0.6,0.7` runs once per similarity threshold. `python tools/pg.py down` removes the container.
 
 ## Tests
 
 ```
 python tools/pg.py up        # a missing database fails the tests, it never skips them
-python -m pytest             # 788 tests, about five minutes
+python -m pytest             # 788 tests, about five minutes, in the database parcelkey_test, never the demo one
 python tests/mutation_check.py --module normalise     # one module at a time; --guards runs the named guards; --summary totals them
 ```
 

@@ -3,7 +3,8 @@
     python tools/measure.py --seed-dir out/seed                    one run with the default settings, both agencies
     python tools/measure.py --seed-dir out/seed --sweep 0.5,0.6,0.7,0.8   the same data once per street similarity threshold
 
-The database is emptied before each run (agency tables, master properties and the G-NAF tables), then the generated G-NAF files are loaded again. Start PostgreSQL first with
+The run uses its own database, `parcelkey_measure` (made on the first run), and empties it before each run (agency tables, master properties and the G-NAF tables), then loads the
+generated G-NAF files again. It never touches the demo database `parcelkey` that the README's Run it steps fill, and refuses to run against it. Start PostgreSQL first with
 `python tools/pg.py up`.
 """
 from __future__ import annotations
@@ -25,8 +26,7 @@ AGENCIES = ("agency-a", "agency-b")
 
 
 def run_once(seed_dir: Path, cfg: MatchConfig, *, verbose: bool) -> dict:
-    admin = db.default_admin_dsn()
-    db.init_db(admin)
+    admin, _ = db.use_own_database(db.MEASURE_DB)
     db.wipe(admin, reference=True)
     t0 = time.perf_counter()
     with psycopg.connect(admin) as conn:

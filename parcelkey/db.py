@@ -23,6 +23,9 @@ SCHEMA = "parcelkey"
 APP_ROLE = "parcelkey_app"
 OWNER_ROLE = "parcelkey_owner"
 DEFAULT_PORT = 5436
+DEMO_DB = "parcelkey"                     # the database the README's Run it steps fill: the CLI uses it, the tests and tools/measure.py never do
+TEST_DB = "parcelkey_test"                # what pytest empties and refills
+MEASURE_DB = "parcelkey_measure"          # what tools/measure.py empties and refills
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 INIT_LOCK = 74160002                      # no-mutate: any number does, it only has to be the same in every call (two init runs at once take turns)
 
@@ -71,7 +74,7 @@ def retarget(dsn: str, **changes: str) -> str:
 
 def _base(user: str, pw: str) -> str:
     return make_conninfo(host=os.environ.get("PARCELKEY_PG_HOST", "localhost"), port=os.environ.get("PARCELKEY_PG_PORT", str(DEFAULT_PORT)),
-                         dbname=os.environ.get("PARCELKEY_PG_DB", "parcelkey"), user=user, password=pw)
+                         dbname=os.environ.get("PARCELKEY_PG_DB", DEMO_DB), user=user, password=pw)
 
 
 def default_dsn() -> str:
@@ -85,6 +88,55 @@ def default_admin_dsn() -> str:
 def default_owner_dsn() -> str:
     """The table owner role on the same server and database as the app role (tests use it to show that FORCE row level security binds the owner too)."""
     return retarget(os.environ.get("PARCELKEY_DSN") or _base(APP_ROLE, ""), user=OWNER_ROLE, password=password("PARCELKEY_OWNER_PASSWORD"))
+
+
+def database_name(dsn: str) -> str:
+    return conninfo_to_dict(dsn).get("dbname", "")
+
+
+def refuse_demo_database(*dsns: str) -> None:
+    """Raise when any of these connection strings names the demo database. Whatever empties a database (the tests, tools/measure.py) calls this first."""
+    for dsn in dsns:
+        if database_name(dsn) == DEMO_DB:
+            raise RuntimeError(f"this would empty the demo database {DEMO_DB!r}: point PARCELKEY_PG_DB (or both DSNs) at another database; the tests use {TEST_DB!r} and tools/measure.py uses {MEASURE_DB!r}")
+
+
+def aim_at(name: str) -> None:
+    """Make `name` this process's database. The environment wins when it names BOTH connection strings (the mutation check gives each worker its own database that way);
+    otherwise `PARCELKEY_PG_DB` is set to `name` and a lone DSN is dropped, so the two roles never end up in different databases. Connects to nothing."""
+    if not (os.environ.get("PARCELKEY_DSN") and os.environ.get("PARCELKEY_ADMIN_DSN")):
+        os.environ.pop("PARCELKEY_DSN", None)
+        os.environ.pop("PARCELKEY_ADMIN_DSN", None)
+        os.environ["PARCELKEY_PG_DB"] = name
+
+
+def select_database(name: str) -> tuple[str, str]:
+    """`aim_at(name)`, then check what the two connection strings now name: one database, and not the demo one. Returns (admin dsn, app dsn)."""
+    aim_at(name)
+    admin, app = default_admin_dsn(), default_dsn()
+    refuse_demo_database(admin, app)
+    if database_name(admin) != database_name(app):
+        raise RuntimeError(f"the administrator connection uses database {database_name(admin)!r} and the app connection {database_name(app)!r}: they must be one database")
+    return admin, app
+
+
+def use_own_database(name: str) -> tuple[str, str]:
+    """`select_database`, then make sure the database exists and has the schema. Returns (admin dsn, app dsn)."""
+    admin, app = select_database(name)
+    ensure_database(admin)
+    init_db(admin)
+    return admin, app
+
+
+def ensure_database(admin_dsn: str) -> None:
+    """Create the database the administrator connection names when the server does not have it yet (connecting through the `postgres` database to do so)."""
+    name = database_name(admin_dsn)
+    with psycopg.connect(retarget(admin_dsn, dbname="postgres"), autocommit=True, connect_timeout=10) as conn:          # no-mutate: the timeout is a number of seconds, any will do
+        if conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone() is None:
+            try:
+                conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+            except psycopg.errors.DuplicateDatabase:          # no-mutate: another process made it a moment ago, which is what was wanted
+                pass
 
 
 def migration_files() -> list[tuple[str, str]]:
@@ -153,14 +205,16 @@ def init_db(admin_dsn: str, app_password: str | None = None, owner_password: str
 
 
 def wipe(admin_dsn: str, *, reference: bool = False) -> None:
-    """Empty the agency tables, the master property list and (with reference=True) the G-NAF tables. Administrator connection, for tests and demos."""
+    """Empty the agency tables, the master property list and (with reference=True) the G-NAF tables. Administrator connection, for tests and tools/measure.py. Refuses the demo database."""
+    refuse_demo_database(admin_dsn)
     tables = [*AGENCY_TABLES, *MASTER_TABLES, *(REFERENCE_TABLES if reference else ())]
     with psycopg.connect(admin_dsn) as conn:                       # the with block commits
         conn.execute(f"TRUNCATE {', '.join(SCHEMA + '.' + t for t in tables)} RESTART IDENTITY")
 
 
 def wipe_reference(admin_dsn: str) -> None:
-    """Empty only the G-NAF tables and the flat reference, leaving every agency table and the master property list as they are (tests that change the reference mid-run)."""
+    """Empty only the G-NAF tables and the flat reference, leaving every agency table and the master property list as they are (tests that change the reference mid-run). Refuses the demo database."""
+    refuse_demo_database(admin_dsn)
     with psycopg.connect(admin_dsn) as conn:
         conn.execute(f"TRUNCATE {', '.join(SCHEMA + '.' + t for t in REFERENCE_TABLES)}")
 
