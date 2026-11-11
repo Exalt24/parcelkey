@@ -364,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--module", choices=sorted(FILES))
     ap.add_argument("--guards", action="store_true", help="run the named guards")
     ap.add_argument("--part", help="i/n: run the i-th of n slices of the mutants")
-    ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--jobs", type=int, default=max(2, (os.cpu_count() or 4) // 2), help="parallel workers; each owns a database copy and a repo copy, so half the cores is the measured sweet spot")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--no-full-suite", action="store_true", help="skip the whole-suite rerun of survivors")
     ap.add_argument("--class-tests-only", action="store_true", help="stage 1 runs only the corpus replays and the CLASS-TABLE tests, and a survivor is not rerun on the whole suite: a mutant counts as killed only when one of those fails")

@@ -11,9 +11,9 @@ gnaf             69 mutants    69 killed    0 survived
 named guards     40 mutants    40 killed    0 survived
 ingest           63 mutants    63 killed    0 survived
 master           17 mutants    17 killed    0 survived
-match           249 mutants   249 killed    0 survived
-normalise       893 mutants   893 killed    0 survived
+match           303 mutants   303 killed    0 survived
+normalise      1039 mutants  1039 killed    0 survived
 quality          18 mutants    18 killed    0 survived
 reconcile       118 mutants   118 killed    0 survived
 records          22 mutants    22 killed    0 survived
-total          1798 mutants  1798 killed    0 survived
+total          1998 mutants  1998 killed    0 survived
