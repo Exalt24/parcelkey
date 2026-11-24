@@ -89,6 +89,7 @@ _DISALLOWED = re.compile(r"[^A-Z0-9/,\- #]")
 _POSTCODE = re.compile(r"^\d{4}$")
 _SPACED_SLASH = re.compile(r"(?<=[A-Z0-9])\s+/\s*(?=\d)|(?<=[A-Z0-9])\s*/\s+(?=\d)")          # `4 / 18`, `4 /18` and `4/ 18` are the unit slash
 _DASH_LETTER = re.compile(r"^(\d+)-([A-Z])$")                    # 4-A is number 4A
+STREET_DESCRIPTORS = (("HOME",), ("OFFICE",), ("SHOP",), ("GARAGE",), ("PENTHOUSE",), ("GRANNY", "FLAT"))          # a word a feed puts after the street type to say which building on the block (12 Smith St Home); it is not part of the street
 _NOT_A_LOCALITY_START = UNIT_MARKERS | LEVEL_MARKERS | {"LOT", "REAR"}
 # the addresses a form is filled with when the person gave none: they are not evidence that two records are one person
 PLACEHOLDER_EMAILS = frozenset({"noemail@noemail.com", "noemail@email.com", "noemail@gmail.com", "nomail@nomail.com", "no@email.com", "none@none.com", "no@no.com", "na@na.com", "n@n.com",
@@ -99,6 +100,8 @@ _EMAIL_NAMED = re.compile(r"^([^<>]*)<([^<>]*)>$")                   # Kate Smit
 _EMAIL_TAIL_NOTE = re.compile(r"\s*\([^()]*\)\s*$")                  # kate@example.com (Kate)
 _BRACKET_NOTE = re.compile(r"\([^()]*\)|\([^(),]*(?=,|$)")          # 12 Smith St (rear): the note and its brackets; one never closed ends at the next comma or the end of the line
 _UNIT_WORD_ALT = "|".join(sorted((w for w in _UNIT_WORDS if w != "#"), key=len, reverse=True))          # no-mutate: alternation backtracks, so the order of the words only changes speed
+_BRACKET_UNIT_WORDS = "|".join(sorted((w for w in (_PLAIN_UNIT_WORDS | LEVEL_MARKERS | {"LOT"}) if w != "#"), key=len, reverse=True))          # no-mutate: alternation backtracks, so the order of the words only changes speed
+_BRACKET_UNIT = re.compile(rf"\(\s*(?:{_BRACKET_UNIT_WORDS})\.?\s*(?:(?:NO|NUMBER|NUM|NR)\.?\s*)?(?:[A-Z]{{0,2}}\d+[A-Z]?(?:[.\-]\d{{1,4}})?|[A-Z])\s*\)", re.IGNORECASE)          # (Unit 5), (Apt 15), (Level 3), (Lot 7): a unit written in round brackets is the unit, as it is in square brackets; (5) and (rear) stay notes
 # a unit number written with a dot or a dash between its level and its flat (Unit 3.02, Apt 12-05, 3.02/12 Smith St): G-NAF holds a flat as one integer (FLAT_NUMBER, up to five digits), so the parts are joined (302, 1205)
 _UNIT_DOTTED = re.compile(rf"((?<![A-Za-z0-9])(?:{_UNIT_WORD_ALT})\s*|#\s*)(\d{{1,4}})(?:\.(\d{{1,4}})|-(0\d{{1,3}}))(?![\d.\-])", re.IGNORECASE)
 _DOTTED_SLASH = re.compile(r"(?<![A-Za-z0-9.])(\d{1,4})\.(\d{1,4})(?=/\d)")
@@ -554,7 +557,7 @@ def normalise_address(line: str | None, suburb: str | None = None, state: str | 
     """
     rules: list[str] = []
     raw = line or ""
-    unbracketed = _BRACKET_NOTE.sub(" ", raw)
+    unbracketed = _BRACKET_NOTE.sub(lambda m: m.group(0) if _BRACKET_UNIT.fullmatch(m.group(0)) else " ", raw)          # a bracket that holds a unit keeps its words; _prep strips the brackets themselves
     if unbracketed != raw:
         _add(rules, "BRACKET_NOTE_DROPPED")
         raw = unbracketed
@@ -736,6 +739,12 @@ def normalise_address(line: str | None, suburb: str | None = None, state: str | 
             continue
         del words[j:j + size]
     words = _drop_corner(words, rules)
+    for descriptor in STREET_DESCRIPTORS:          # `12 Smith St Home`: a word that says which building on the block ends the street words, and a St in front of it is a street type, never Saint
+        size = len(descriptor)
+        if len(words) >= size + 2 and tuple(words[-size:]) == descriptor and _follows_street(words, len(words) - size):
+            del words[-size:]
+            _add(rules, "DESCRIPTOR_AFTER_STREET")
+            break
     if not tail_locality:
         # no comma told where the street ends: read `... STATE POSTCODE` off the end, then take the suburb from the street words
         trial = []
